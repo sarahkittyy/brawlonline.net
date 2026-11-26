@@ -25,6 +25,7 @@ import { async as AsyncStreamZip } from "node-stream-zip";
 import path from "path";
 import type { ByteProgress } from "utils/copy_file";
 import { copyFileWithProgress, throttleProgress } from "utils/copy_file";
+import { fetchErrorMessage, fetchRetrying } from "utils/fetch_error";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
 import { PLUGIN_SD_PATH } from "../install/paths";
@@ -220,9 +221,12 @@ export class ProjectPunch {
       ? `${PROJECT_PUNCH_API}/tags/${encodeURIComponent(this.opts.tag)}`
       : `${PROJECT_PUNCH_API}/latest`;
     try {
-      const res = await this.fetchImpl(url, {
-        headers: { Accept: "application/vnd.github+json", "User-Agent": "BrawlOnline-Launcher" },
-      });
+      const res = await fetchRetrying(
+        this.fetchImpl,
+        url,
+        { headers: { Accept: "application/vnd.github+json", "User-Agent": "BrawlOnline-Launcher" } },
+        (err) => this.log(`Project Punch: no answer from GitHub, asking again (${fetchErrorMessage(err)})`),
+      );
       if (!res.ok) {
         throw new ProjectPunchError(`GitHub answered HTTP ${res.status}`);
       }
@@ -230,7 +234,7 @@ export class ProjectPunch {
       this.releaseAt = Date.now();
       this.releaseError = null;
     } catch (err) {
-      this.releaseError = err instanceof Error ? err.message : String(err);
+      this.releaseError = fetchErrorMessage(err);
       this.log(`Project Punch: could not read the latest release (${this.releaseError})`);
     }
     return this.release;
@@ -419,12 +423,17 @@ export class ProjectPunch {
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     let res: Response;
     try {
-      res = await this.fetchImpl(release.url, { signal, headers: { "User-Agent": "BrawlOnline-Launcher" } });
+      res = await fetchRetrying(
+        this.fetchImpl,
+        release.url,
+        { signal, headers: { "User-Agent": "BrawlOnline-Launcher" } },
+        (err) => this.log(`Project Punch: no answer from GitHub, asking again (${fetchErrorMessage(err)})`),
+      );
     } catch (err) {
       if (signal.aborted) {
         throw new ProjectPunchCancelled();
       }
-      throw new ProjectPunchError(`Could not download Project Punch (${err instanceof Error ? err.message : err})`);
+      throw new ProjectPunchError(`Could not download Project Punch (${fetchErrorMessage(err)})`);
     }
     if (!res.ok || !res.body) {
       throw new ProjectPunchError(`Could not download Project Punch: HTTP ${res.status}`);

@@ -77,7 +77,8 @@ export default function setupEmissaryIpc({
         // Installs an older release, to try updating (`PPO_EMISSARY_TAG=v0.6.0`).
         tag: testing ? process.env.PPO_EMISSARY_TAG?.trim() || undefined : undefined,
         ...(localReleases ? { fetch: localReleasesFetch(localReleases) } : {}),
-        log: (message) => log.info(message),
+        // warn: main.log keeps warn and up in packaged builds; installs, updates and failures belong in bug reports.
+        log: (message) => log.warn(message),
         onChange: (state) => {
           void ipc_emissaryState.main!.trigger(state).catch(log.error);
         },

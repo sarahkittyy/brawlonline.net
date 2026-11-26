@@ -28,6 +28,7 @@ import path from "path";
 import { Readable } from "stream";
 import type { ByteProgress } from "utils/copy_file";
 import { throttleProgress } from "utils/copy_file";
+import { fetchErrorMessage, fetchRetrying } from "utils/fetch_error";
 import { removeTree } from "utils/remove_tree";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
@@ -485,9 +486,12 @@ export class EmissaryRecomp {
     }
     const url = this.opts.tag ? `${EMISSARY_API}/tags/${encodeURIComponent(this.opts.tag)}` : `${EMISSARY_API}/latest`;
     try {
-      const res = await this.fetchImpl(url, {
-        headers: { Accept: "application/vnd.github+json", "User-Agent": "BrawlOnline-Launcher" },
-      });
+      const res = await fetchRetrying(
+        this.fetchImpl,
+        url,
+        { headers: { Accept: "application/vnd.github+json", "User-Agent": "BrawlOnline-Launcher" } },
+        (err) => this.log(`EmissaryRecomp: no answer from GitHub, asking again (${fetchErrorMessage(err)})`),
+      );
       if (!res.ok) {
         throw new EmissaryError(`GitHub answered HTTP ${res.status}`);
       }
@@ -497,7 +501,7 @@ export class EmissaryRecomp {
       this.releaseAt = Date.now();
       this.releaseError = null;
     } catch (err) {
-      this.releaseError = err instanceof Error ? err.message : String(err);
+      this.releaseError = fetchErrorMessage(err);
       this.log(`EmissaryRecomp: could not read the latest release (${this.releaseError})`);
     }
     return this.release;
@@ -520,7 +524,7 @@ export class EmissaryRecomp {
       }
       return manifest;
     } catch (err) {
-      this.log(`EmissaryRecomp ${release.version}: its manifest.json could not be read (${err})`);
+      this.log(`EmissaryRecomp ${release.version}: its manifest.json could not be read (${fetchErrorMessage(err)})`);
       return null;
     }
   }
@@ -898,12 +902,17 @@ export class EmissaryRecomp {
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     let res: Response;
     try {
-      res = await this.fetchImpl(release.url, { signal, headers: { "User-Agent": "BrawlOnline-Launcher" } });
+      res = await fetchRetrying(
+        this.fetchImpl,
+        release.url,
+        { signal, headers: { "User-Agent": "BrawlOnline-Launcher" } },
+        (err) => this.log(`EmissaryRecomp: no answer from GitHub, asking again (${fetchErrorMessage(err)})`),
+      );
     } catch (err) {
       if (signal.aborted) {
         throw new EmissaryCancelled();
       }
-      throw new EmissaryError(`Could not download EmissaryRecomp (${err instanceof Error ? err.message : err})`);
+      throw new EmissaryError(`Could not download EmissaryRecomp (${fetchErrorMessage(err)})`);
     }
     if (!res.ok || !res.body) {
       throw new EmissaryError(`Could not download EmissaryRecomp: HTTP ${res.status}`);

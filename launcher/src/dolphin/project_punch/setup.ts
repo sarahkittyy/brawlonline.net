@@ -36,7 +36,8 @@ export default function setupProjectPunchIpc({ dolphinManager }: { dolphinManage
         otherPPlusBuild: otherProjectPlusBuild,
         // Installs an older release, to try updating (`PPO_PROJECT_PUNCH_TAG=v1.3.0`).
         tag: test.active || !app.isPackaged ? process.env.PPO_PROJECT_PUNCH_TAG?.trim() || undefined : undefined,
-        log: (message) => log.info(message),
+        // warn: main.log keeps warn and up in packaged builds; installs, updates and failures belong in bug reports.
+        log: (message) => log.warn(message),
         onChange: (state) => {
           void ipc_projectPunchState.main!.trigger(state).catch(log.error);
         },
