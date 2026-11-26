@@ -58,6 +58,15 @@ namespace PPOM {
     // player's roster entries 16-49 (RosterMore) at +0xF8, SESSION to 0x640 with every player's at
     // +0x420.
     const u16 VERSION = 13;
+    // The oldest version an EmissaryRecomp release's core still takes at most (v0.7.0 and v0.7.1:
+    // 12). The launcher puts this plugin on every player's card the moment it updates, while the
+    // recomp release built on the same core comes out later (its CI takes half an hour, and can
+    // fail), and a core finds only a block whose version it knows (bug reports #355/#356: launcher
+    // 0.2.11's v13 block and recomp v0.7.1, every invite and room "accepted" and nothing after). So
+    // the block carries one header per version from VERSION down to this one (Block.compat), each
+    // a view of the same mailbox, LOCAL and SESSION at that version's sizes: every version so far
+    // only grew them at their ends. A core takes the first header it knows, newest first.
+    const u16 OLDEST_CORE_VERSION = 12;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -861,15 +870,23 @@ namespace PPOM {
                                   // Versus match (a sync test)
     };
 
-    struct Block {
+    // Offsets are from the header's own address.
+    struct Header {
         u32 magic;
         u16 version;
-        u16 size;             // sizeof(Block)
+        u16 size;             // from this header to the block's end
         u16 mailboxOff, mailboxSize;
         u16 sessionOff, sessionSize;
         u16 localOff, localSize;
         u16 debugOff, debugSize;
-        u32 _reserved[3];     // header = 0x24 bytes
+        u32 _reserved[3];
+    };                        // 0x24
+
+    struct Block {
+        Header header;        // VERSION's
+        // VERSION - 1 down to OLDEST_CORE_VERSION, for the cores of EmissaryRecomp releases from
+        // before this plugin (see OLDEST_CORE_VERSION).
+        Header compat[VERSION - OLDEST_CORE_VERSION];
         Mailbox mailbox;
         Local local;          // must follow the mailbox (one range excluded from rollback)
         Session session;

@@ -4,17 +4,38 @@
 
 namespace PPOM {
 
-    // Aggregate-initialised so it lives in .data with its header already set: the harness can
-    // find it before the plugin's prolog has run any code.
+    // LOCAL's and SESSION's sizes at a version (OLDEST_CORE_VERSION on): what a core of that
+    // version checks a header's sizes against (GameBridge.cpp LocalSize, SessionSize).
+    constexpr u16 localSizeAt(u16 v) { return v >= 13 ? 0x180 : 0xF8; }
+    constexpr u16 sessionSizeAt(u16 v) { return v >= 13 ? 0x640 : 0x420; }
+    // A version that changes a size adds it above (and a compat header below).
+    static_assert(localSizeAt(VERSION) == sizeof(Local) && sessionSizeAt(VERSION) == sizeof(Session),
+                  "PPOM sizes by version");
+
+    // The header for version `v` at `at` bytes into the block: every version's points at the same
+    // mailbox, LOCAL, SESSION and DEBUG.
+    constexpr Header headerAt(u16 v, u32 at) {
+        return Header{
+            MAGIC,
+            v,
+            (u16)(sizeof(Block) - at),
+            (u16)(__builtin_offsetof(Block, mailbox) - at), (u16)sizeof(Mailbox),
+            (u16)(__builtin_offsetof(Block, session) - at), sessionSizeAt(v),
+            (u16)(__builtin_offsetof(Block, local) - at), localSizeAt(v),
+            (u16)(__builtin_offsetof(Block, debug) - at), (u16)sizeof(Debug),
+            {0, 0, 0},
+        };
+    }
+    const u32 COMPAT_AT = __builtin_offsetof(Block, compat);
+
+    // Aggregate-initialised so it lives in .data with its headers already set: the harness (and
+    // a core) can find it before the plugin's prolog has run any code. Newest first: a core takes
+    // the first header it knows.
+    static_assert(VERSION - OLDEST_CORE_VERSION == 1,
+                  "one compat header per version from VERSION - 1 down to OLDEST_CORE_VERSION");
     Block g_block __attribute__((aligned(32))) = {
-        MAGIC,
-        VERSION,
-        (u16)sizeof(Block),
-        (u16)__builtin_offsetof(Block, mailbox), (u16)sizeof(Mailbox),
-        (u16)__builtin_offsetof(Block, session), (u16)sizeof(Session),
-        (u16)__builtin_offsetof(Block, local), (u16)sizeof(Local),
-        (u16)__builtin_offsetof(Block, debug), (u16)sizeof(Debug),
-        {0, 0, 0},
+        headerAt(VERSION, 0),
+        {headerAt(12, COMPAT_AT)},
     };
 
     // The contract with Dolphin (GameBridge.cpp): sizes and the mailbox/LOCAL adjacency.
