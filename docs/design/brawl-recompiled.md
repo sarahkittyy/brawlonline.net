@@ -422,3 +422,13 @@ Sarah's board: "take a full ui pass on the emissary in-game ui. the settings are
 New text for Sarah's review: the title card's hint "F10, Home or hold START = options" (was "F10 or Home = options"); the footer's "START close" (was "F10 / Home: close"; F10 and Home still close it).
 
 **Checked** on a local build of `brawlonline/ui-pass` started without the core (`BRAWL_OPTIONS_TAB`, which now also opens on the title screen): Graphics (top and scrolled), Audio, Controls at 1280x720, 800x600 and 2400x1350, captured with PrintWindow; a virtual Xbox 360 pad (ViGEm + vgamepad, focus check bypassed in a throwaway build since the test task cannot take the foreground): START held at the title opened the menu (and the title took the press, as Brawl does), R went to Audio, the d-pad into its rows, START closed it. Not checked: a real GameCube adapter, macOS / Linux builds, the core build in an online game (the menu code is the same; only its tabs differ).
+
+## 18. Cracks in skinned models with in-between frames (bug report #358, 2026-11-26)
+
+LILL#469 (v0.7.1/v0.7.2, Predict at 120/240): "some models (like squirtle) have a tearing issue on the models, as if the polygons has gaps. it also is visible on kirby as well". Reproduced on v0.7.2 with Predict 240: Squirtle's head split in two across his face, the Final Destination edge through his shell, only in the inserted frames (interpolation off had none).
+
+**Cause.** g3d loads at most 10 matrices a draw, so a skinned body is several draws whose seams use the same bones. Aurora's frame interpolation already paired those draws by matrix content, but Predict decided per draw whether to carry the motion forward and glided each draw by the median of its own matrices, so two pieces of one surface were drawn up to most of a frame apart. Interpolate had a smaller form: a draw with an unresolved matrix showed the newest pose while its siblings showed the in-between one.
+
+**Fix** (recomp `brawlonline/bug358` 9109dc5, merged into `brawlonline/windows-build` 235b3f0): draws that share a matrix are one unit; a unit duplicates as a whole, and Predict decides once per unit (pooled hold gates and median step, one glide).
+
+**Checked** with a Squirtle vs Kirby match on Final Destination recorded at 240 pictures a second, counting stage pixels inside Squirtle: v0.7.2 cracked in 100 of 2621 and 32 of 2025 frames, the fix in 0 of 1979 (Predict) and 0 of 1965 (Interpolate). Predict holds ~19% of draws there instead of ~13% (a whole mesh holds when one piece would have). Kirby was not measured on his own. Ships with the next EmissaryRecomp release.
