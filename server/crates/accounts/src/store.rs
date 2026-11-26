@@ -26,6 +26,9 @@ pub struct UserRow {
     pub chat_muted_at: Option<DateTime<Utc>>,
     /// Rename lock (`pp-admin user lock-name`): `/v1/me/rename` refuses.
     pub rename_locked_at: Option<DateTime<Utc>>,
+    /// Socials lock (`pp-admin user lock-socials`): `/v1/me/profile` refuses `socials` and Twitch
+    /// won't connect.
+    pub socials_locked_at: Option<DateTime<Utc>>,
 }
 
 impl UserRow {
@@ -38,7 +41,7 @@ impl UserRow {
 }
 
 const USER_COLS: &str = "uid, email, email_verified_at, pw_hash, display_name, connect_code, \
-                         play_key_version, rules_version, role, banned_until, ban_reason, created_at,                          chat_muted_at, rename_locked_at";
+                         play_key_version, rules_version, role, banned_until, ban_reason, created_at,                          chat_muted_at, rename_locked_at, socials_locked_at";
 
 /// "Banned forever" is stored as a far-future timestamp.
 pub fn permanent_ban() -> DateTime<Utc> {
@@ -467,6 +470,18 @@ pub async fn set_room_name_if(pool: &PgPool, uid: Uuid, kind: RoomKind, from: &s
 pub async fn set_rename_locked(pool: &PgPool, uid: Uuid, locked: bool) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE users SET rename_locked_at = CASE WHEN $2 THEN COALESCE(rename_locked_at, now()) END WHERE uid = $1",
+    )
+    .bind(uid)
+    .bind(locked)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Locks (`pp-admin user lock-socials`) or unlocks the account's social media accounts.
+pub async fn set_socials_locked(pool: &PgPool, uid: Uuid, locked: bool) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE users SET socials_locked_at = CASE WHEN $2 THEN COALESCE(socials_locked_at, now()) END WHERE uid = $1",
     )
     .bind(uid)
     .bind(locked)

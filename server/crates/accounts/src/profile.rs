@@ -199,7 +199,7 @@ type RawProfileRow = (
     bool,
 );
 
-async fn profile_row(pool: &PgPool, uid: Uuid) -> sqlx::Result<StoredProfile> {
+async fn profile_row<'e, E: sqlx::PgExecutor<'e>>(pool: E, uid: Uuid) -> sqlx::Result<StoredProfile> {
     let row: Option<RawProfileRow> = sqlx::query_as(
         "SELECT mains, country, discord, twitter, twitch, youtube, tiktok, instagram, show_country, show_main
            FROM profiles WHERE uid = $1",
@@ -284,16 +284,7 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
     // Only what the lists still know (a character or flag dropped from them since is left out).
     let mains = stored.mains.into_iter().filter(|m| character_name(m).is_some()).collect();
     let country = stored.country.filter(|c| country_name(c).is_some());
-    // Twitch is the connected account only (docs/design/twitch-live.md): anyone can type anyone's handle, so a typed
-    // one is kept only as the launcher's hint to connect and never shown.
-    let mut handles = stored.handles;
-    if let Some(i) = Platform::ALL.iter().position(|p| *p == Platform::Twitch) {
-        handles[i] = sqlx::query_scalar("SELECT login FROM twitch_links WHERE uid = $1")
-            .bind(user.uid)
-            .fetch_optional(pool)
-            .await?;
-    }
-    let socials = Platform::ALL.into_iter().zip(handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect();
+    let socials = shown_socials(pool, user.uid, stored.handles).await?;
     let tag = name_tags(pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default();
     Ok(Profile {
         uid: user.uid,
@@ -327,8 +318,9 @@ async fn profile_of(pool: &PgPool, user: &UserRow, base_url: &str) -> sqlx::Resu
 /// (at most [`common::profile::MAX_MAINS`], no repeats); `country`: a flag code or null;
 /// `socials`: `{platform: text}`, where the text is a username, `@username` or a link to the
 /// account (stored as its handle; blank or null removes it). A username the slur filter calls a
-/// slur is refused. 400 for anything else not allowed, with a message for the player. Session
-/// auth; limited per account. Answers the profile as `GET /v1/profiles/<uid>` does.
+/// slur is refused, and so is a new or changed one while an admin has locked them (`pp-admin user
+/// lock-socials`, 403 `socials_locked`; removing one is allowed). 400 for anything else not allowed, with a message for the
+/// player. Session auth; limited per account. Answers the profile as `GET /v1/profiles/<uid>` does.
 pub async fn update(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -364,6 +356,13 @@ pub async fn update(
                 .ok_or_else(|| ApiError::bad_request("invalid_profile", format!("Unknown platform: {key}")))?;
             let i = Platform::ALL.iter().position(|p| *p == platform).unwrap_or(0);
             let handle = platform.parse(text.as_deref().unwrap_or("")).map_err(bad)?;
+            // A locked account can only take its own down (an edit that sends them unchanged still saves the rest).
+            if user.socials_locked_at.is_some() && handle.is_some() && handles[i] != handle {
+                return Err(ApiError::forbidden(
+                    "socials_locked",
+                    "Your social accounts can't be changed. Contact the admins.",
+                ));
+            }
             if let Some(h) = &handle {
                 if handles[i].as_deref() != Some(h.as_str()) {
                     match state.slur_filter.is_slur(crate::slur_filter::What::SocialHandle, h).await {
@@ -408,6 +407,60 @@ pub async fn update(
     let tag = name_tags(&state.pool, &[user.uid]).await?.remove(&user.uid).unwrap_or_default();
     state.social.name_tag_changed(&user.uid.to_string(), tag);
     Ok(Json(profile_of(&state.pool, &user, &state.cfg.public_base_url).await?))
+}
+
+/// What [`clear_socials`] removed: each platform's key and handle.
+pub type Cleared = Vec<(&'static str, String)>;
+
+/// Empties the account's social media accounts (`pp-admin user clear-socials`, the launcher admin's
+/// rename box), in the caller's transaction: every handle on its profile and its Twitch connection. Answers what it removed, the
+/// connected Twitch login as `twitch` (a typed Twitch handle as `twitch-typed` when it differs).
+/// The live list drops a stream at its next refresh, or at once through [`crate::twitch::forget`].
+pub async fn clear_socials(tx: &mut sqlx::PgConnection, uid: Uuid) -> sqlx::Result<Cleared> {
+    let stored = profile_row(&mut *tx, uid).await?;
+    let linked: Option<String> = sqlx::query_scalar("DELETE FROM twitch_links WHERE uid = $1 RETURNING login")
+        .bind(uid)
+        .fetch_optional(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE profiles SET discord = NULL, twitter = NULL, twitch = NULL, youtube = NULL, tiktok = NULL,
+                             instagram = NULL, updated_at = now()
+          WHERE uid = $1",
+    )
+    .bind(uid)
+    .execute(&mut *tx)
+    .await?;
+    let mut cleared = Cleared::new();
+    for (p, h) in Platform::ALL.into_iter().zip(stored.handles) {
+        if p == Platform::Twitch {
+            if let Some(l) = &linked {
+                cleared.push(("twitch", l.clone()));
+            }
+            if let Some(h) = h.filter(|h| Some(h) != linked.as_ref()) {
+                cleared.push(("twitch-typed", h));
+            }
+        } else if let Some(h) = h {
+            cleared.push((p.key(), h));
+        }
+    }
+    Ok(cleared)
+}
+
+/// The account's social media accounts as its profile shows them (the admin's rename box).
+pub async fn socials_of(pool: &PgPool, uid: Uuid) -> sqlx::Result<Vec<Social>> {
+    let handles = profile_row(pool, uid).await?.handles;
+    shown_socials(pool, uid, handles).await
+}
+
+/// The stored handles as a profile shows them. Twitch is the connected account only
+/// (docs/design/twitch-live.md): anyone can type anyone's handle, so a typed one is kept only as
+/// the launcher's hint to connect and never shown.
+async fn shown_socials(pool: &PgPool, uid: Uuid, mut handles: [Option<String>; 6]) -> sqlx::Result<Vec<Social>> {
+    if let Some(i) = Platform::ALL.iter().position(|p| *p == Platform::Twitch) {
+        handles[i] =
+            sqlx::query_scalar("SELECT login FROM twitch_links WHERE uid = $1").bind(uid).fetch_optional(pool).await?;
+    }
+    Ok(Platform::ALL.into_iter().zip(handles).filter_map(|(p, h)| Some(Social::of(p, h?))).collect())
 }
 
 /// The body of `PUT /v1/me/profile`. `country: null` removes the country; a missing field is left

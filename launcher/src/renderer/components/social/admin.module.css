@@ -13,7 +13,7 @@
   font-size: 13px;
 }
 
-/* The lock at the bottom left, Cancel and Apply at the right. */
+/* The locks and the socials clear at the bottom left, Cancel and Apply at the right. */
 .actions {
   display: flex;
   align-items: center;
@@ -31,6 +31,24 @@
 
 .unlocked {
   color: var(--text-dim) !important;
+}
+
+/* The socials clear, pressed: their socials go on Apply. */
+.clearing {
+  color: var(--mui-palette-error-main, #f44336) !important;
+}
+
+/* The clear's tooltip: its label, then each social with its logo. */
+.clearTip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clearTipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .banText {

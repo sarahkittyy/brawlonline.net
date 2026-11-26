@@ -133,12 +133,28 @@ export type AdminUser = {
   connectCode: string;
   muted: boolean;
   nameLocked: boolean;
+  /** They can't change the social media accounts on their profile or connect Twitch. */
+  socialsLocked: boolean;
+  /** The social media accounts on their profile, as it shows them (Twitch: the connected one). */
+  socials: AdminSocial[];
   banned: boolean;
   admin: boolean;
 };
 
-/** `PUT /v1/admin/users/<uid>`: each field set is changed; all of them or none. */
-export type AdminUserUpdate = { displayName?: string; connectCode?: string; nameLocked?: boolean };
+/** One of {@link AdminUser.socials}. */
+export type AdminSocial = { platform: SocialPlatform; display: string };
+
+/**
+ * `PUT /v1/admin/users/<uid>`: each field set is changed; all of them or none. `clearSocials` removes every social
+ * media account from their profile and their Twitch connection.
+ */
+export type AdminUserUpdate = {
+  displayName?: string;
+  connectCode?: string;
+  nameLocked?: boolean;
+  socialsLocked?: boolean;
+  clearSocials?: boolean;
+};
 
 /** `GET /v1/admin/codes`: who has a connect code (`uid` null: nobody). */
 export type AdminCodeOwner = { code: string; uid: string | null; displayName: string | null };

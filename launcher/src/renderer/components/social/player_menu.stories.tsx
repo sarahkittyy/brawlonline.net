@@ -7,6 +7,7 @@ import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
 import type { Services } from "@/services/types";
 
+import { AdminRenameDialog } from "./admin_rename_dialog";
 import { PlayerMenu } from "./player_menu";
 
 export default {
@@ -27,7 +28,18 @@ const state: SocialState = {
   conversations: {},
 };
 
-const user = { uid: "ness", displayName: "Ness", connectCode: "NESS#44", muted: false, nameLocked: false };
+const user = {
+  uid: "ness",
+  displayName: "Ness",
+  connectCode: "NESS#44",
+  muted: false,
+  nameLocked: false,
+  socialsLocked: false,
+  socials: [
+    { platform: "discord", display: "ness.d" },
+    { platform: "twitch", display: "@nesstv" },
+  ],
+};
 const toasts = { showError: () => {}, showInfo: () => {}, showWarning: () => {}, showSuccess: () => {} };
 const { ServiceProvider } = createServiceProvider({
   services: {
@@ -53,3 +65,12 @@ export const AsAdmin = () => {
     </QueryClientProvider>
   );
 };
+
+/** An admin's rename box: the name lock, the socials lock and the socials clear at the bottom left. */
+export const RenameBox = () => (
+  <QueryClientProvider client={queryClient}>
+    <ServiceProvider>
+      <AdminRenameDialog player={ness} onClose={() => {}} />
+    </ServiceProvider>
+  </QueryClientProvider>
+);

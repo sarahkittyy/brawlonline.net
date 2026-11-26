@@ -588,7 +588,17 @@ class MockBackendClient implements BackendService {
   }
 
   async adminUser(uid: string): Promise<AdminUser> {
-    return { uid, displayName: "", connectCode: "", muted: false, nameLocked: false, banned: false, admin: false };
+    return {
+      uid,
+      displayName: "",
+      connectCode: "",
+      muted: false,
+      nameLocked: false,
+      socialsLocked: false,
+      socials: [],
+      banned: false,
+      admin: false,
+    };
   }
 
   async adminSetMuted(uid: string, muted: boolean): Promise<AdminUser> {
@@ -606,6 +616,8 @@ class MockBackendClient implements BackendService {
       displayName: update.displayName ?? u.displayName,
       connectCode: update.connectCode ?? u.connectCode,
       nameLocked: update.nameLocked ?? u.nameLocked,
+      socialsLocked: update.socialsLocked ?? u.socialsLocked,
+      socials: update.clearSocials ? [] : u.socials,
     };
   }
 

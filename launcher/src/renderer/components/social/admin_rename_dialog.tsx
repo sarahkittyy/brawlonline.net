@@ -1,3 +1,6 @@
+import DeleteSweepRoundedIcon from "@mui/icons-material/DeleteSweepRounded";
+import LinkOffRoundedIcon from "@mui/icons-material/LinkOffRounded";
+import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import LockOpenRoundedIcon from "@mui/icons-material/LockOpenRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import Button from "@mui/material/Button";
@@ -12,6 +15,7 @@ import type { SocialPlayer } from "@social/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import { SocialIcon } from "@/components/profile/social_icons";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useAdminRefresh } from "@/lib/social/admin_refresh";
 import { validateDisplayName } from "@/lib/validate/validate";
@@ -34,9 +38,11 @@ export function canonicalCode(typed: string): string | null {
 const CODE_CHECK_DELAY_MS = 350;
 
 /**
- * An admin's rename box for a player (the player menu's Rename): their name and connect code filled in, the lock at
- * the bottom left (whether they may rename themselves), Apply and Cancel at the right. A code another account has
- * says whose it is and can't be applied (the server refuses it too).
+ * An admin's rename box for a player (the player menu's Rename): their name and connect code filled in, at the bottom
+ * left the name lock (whether they may rename themselves), the socials lock (whether they may change their social
+ * media accounts and connect Twitch) and the socials clear (their accounts listed in its tooltip; removed on Apply),
+ * Apply and Cancel at the right. A code another account has says whose it is and can't be applied (the server
+ * refuses it too).
  */
 export const AdminRenameDialog = ({ player, onClose }: { player: SocialPlayer | null; onClose: () => void }) => (
   <Dialog open={player != null} onClose={onClose} maxWidth="xs" fullWidth={true}>
@@ -57,6 +63,8 @@ const RenameForm = ({ player, onClose }: { player: SocialPlayer; onClose: () => 
   const [name, setName] = useState(player.displayName);
   const [code, setCode] = useState(player.connectCode);
   const [locked, setLocked] = useState<boolean | null>(null);
+  const [socialsLocked, setSocialsLocked] = useState<boolean | null>(null);
+  const [clearSocials, setClearSocials] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
   // The fields start from the list's copy and take the account's own once it is read (unless typed in already).
@@ -69,6 +77,8 @@ const RenameForm = ({ player, onClose }: { player: SocialPlayer; onClose: () => 
     }
   }, [u, touched]);
   const lockShown = locked ?? u?.nameLocked ?? false;
+  const socialsLockShown = socialsLocked ?? u?.socialsLocked ?? false;
+  const socials = u?.socials ?? [];
 
   const trimmedName = name.trim();
   const nameProblem = validateDisplayName(trimmedName);
@@ -97,8 +107,9 @@ const RenameForm = ({ player, onClose }: { player: SocialPlayer; onClose: () => 
 
   const nameChanged = trimmedName !== origName;
   const lockChanged = locked != null && locked !== (u?.nameLocked ?? false);
+  const socialsLockChanged = socialsLocked != null && socialsLocked !== (u?.socialsLocked ?? false);
   const codeError = code.trim() !== "" && canonical == null ? Messages.codeFormat() : null;
-  const changed = nameChanged || codeChanged || lockChanged;
+  const changed = nameChanged || codeChanged || lockChanged || socialsLockChanged || clearSocials;
   const canApply =
     !saving &&
     u != null &&
@@ -121,6 +132,8 @@ const RenameForm = ({ player, onClose }: { player: SocialPlayer; onClose: () => 
         ...(nameChanged ? { displayName: trimmedName } : {}),
         ...(codeChanged && canonical ? { connectCode: canonical } : {}),
         ...(lockChanged && locked != null ? { nameLocked: locked } : {}),
+        ...(socialsLockChanged && socialsLocked != null ? { socialsLocked } : {}),
+        ...(clearSocials ? { clearSocials: true } : {}),
       });
       queryClient.setQueryData(["adminUser", player.uid], saved);
       void queryClient.invalidateQueries({ queryKey: ["profile", player.uid] });
@@ -206,6 +219,54 @@ const RenameForm = ({ player, onClose }: { player: SocialPlayer; onClose: () => 
                 data-testid="admin-rename-lock"
               >
                 {lockShown ? <LockRoundedIcon fontSize="small" /> : <LockOpenRoundedIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={socialsLockShown ? Messages.socialsLocked() : Messages.socialsUnlocked()}
+            placement="top"
+            disableInteractive={true}
+          >
+            <span>
+              <IconButton
+                size="small"
+                aria-label={socialsLockShown ? Messages.unlockSocials() : Messages.lockSocials()}
+                aria-pressed={socialsLockShown}
+                className={socialsLockShown ? styles.locked : styles.unlocked}
+                disabled={saving || u == null}
+                onClick={() => setSocialsLocked(!socialsLockShown)}
+                data-testid="admin-rename-socials-lock"
+              >
+                {socialsLockShown ? <LinkOffRoundedIcon fontSize="small" /> : <LinkRoundedIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={
+              <div className={styles.clearTip}>
+                <div>{clearSocials ? Messages.socialsCleared() : Messages.clearSocials()}</div>
+                {socials.map((s) => (
+                  <div key={s.platform} className={styles.clearTipRow}>
+                    <SocialIcon platform={s.platform} size={14} />
+                    {s.display}
+                  </div>
+                ))}
+              </div>
+            }
+            placement="top"
+            disableInteractive={true}
+          >
+            <span>
+              <IconButton
+                size="small"
+                aria-label={Messages.clearSocials()}
+                aria-pressed={clearSocials}
+                className={clearSocials ? styles.clearing : styles.unlocked}
+                disabled={saving || u == null || (socials.length === 0 && !clearSocials)}
+                onClick={() => setClearSocials(!clearSocials)}
+                data-testid="admin-rename-socials-clear"
+              >
+                <DeleteSweepRoundedIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>

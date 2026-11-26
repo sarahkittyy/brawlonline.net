@@ -200,3 +200,84 @@ async fn admins_rename_any_room() {
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].1, json!({"kind": "pplus", "room": code, "from": null, "to": "be nice"}));
 }
+
+/// An admin locks a player's socials (a new or changed one and a Twitch connect are refused; an
+/// edit that leaves them as they are still saves, and taking one down is allowed) and clears them (every handle and the Twitch
+/// connection), audit-logged; the same box shows what the player has.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admins_lock_and_clear_socials() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let (sarah, sarah_json) = s.create_player("sarah@x.test", "sarah", "sara").await;
+    let (alice, alice_json) = s.create_player("alice@x.test", "alice", "alic").await;
+    make_admin(&s, "sarah@x.test").await;
+    let user = format!("/v1/admin/users/{}", alice_json.uid);
+    let actor = format!("launcher:{}", sarah_json.uid);
+
+    let (st, body) =
+        s.put("/v1/me/profile", Some(&alice), json!({"socials": {"discord": "alice.d", "twitter": "@alicex"}})).await;
+    assert_eq!(st, 200, "{body}");
+    sqlx::query(
+        "INSERT INTO twitch_links (uid, twitch_id, login, display_name) VALUES ($1::uuid, '77', 'alicetv', 'AliceTV')",
+    )
+    .bind(&alice_json.uid)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    let (_, body) = s.get(&user, Some(&sarah)).await;
+    assert_eq!(body["socialsLocked"], false, "{body}");
+    assert_eq!(
+        body["socials"],
+        json!([
+            {"platform": "discord", "display": "alice.d"},
+            {"platform": "twitter", "display": "@alicex"},
+            {"platform": "twitch", "display": "@alicetv"},
+        ]),
+        "{body}"
+    );
+    let (st, body) = s.put(&user, Some(&alice), json!({"socialsLocked": true})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("not_admin")), "{body}");
+
+    // Locked: what she has stays; changing it or connecting Twitch is refused.
+    let (st, body) = s.put(&user, Some(&sarah), json!({"socialsLocked": true})).await;
+    assert_eq!((st, &body["socialsLocked"]), (200, &json!(true)), "{body}");
+    assert_eq!(body["socials"].as_array().unwrap().len(), 3, "{body}");
+    for socials in [json!({"discord": "other"}), json!({"youtube": "@new"})] {
+        let (st, body) = s.put("/v1/me/profile", Some(&alice), json!({"socials": socials})).await;
+        assert_eq!((st, body["error"]["code"].as_str()), (403, Some("socials_locked")), "{socials}: {body}");
+    }
+    let (st, body) = s
+        .put(
+            "/v1/me/profile",
+            Some(&alice),
+            json!({"mains": ["mario"], "socials": {"discord": "alice.d", "youtube": ""}}),
+        )
+        .await;
+    assert_eq!((st, &body["mains"]), (200, &json!(["mario"])), "unchanged socials still save the rest: {body}");
+    let (st, body) = s.post("/v1/me/twitch/connect", Some(&alice), json!({})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("socials_locked")), "{body}");
+    let (st, body) = s.put("/v1/me/profile", Some(&alice), json!({"socials": {"twitter": null}})).await;
+    assert_eq!((st, body["socials"].as_array().map(Vec::len)), (200, Some(2)), "taking one down is allowed: {body}");
+
+    // Cleared: the profile has none, the Twitch connection is gone.
+    let (st, body) = s.put(&user, Some(&sarah), json!({"clearSocials": true})).await;
+    assert_eq!((st, &body["socials"], &body["socialsLocked"]), (200, &json!([]), &json!(true)), "{body}");
+    let (_, p) = s.get(&format!("/v1/profiles/{}", alice_json.uid), None).await;
+    assert_eq!(p["socials"], json!([]), "{p}");
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM twitch_links").fetch_one(&s.pool).await.unwrap();
+    assert_eq!(links, 0);
+    let (st, body) = s.put("/v1/me/profile", Some(&alice), json!({"socials": {"discord": "alice.d"}})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("socials_locked")), "{body}");
+
+    // Unlocked: she sets them again.
+    let (st, body) = s.put(&user, Some(&sarah), json!({"socialsLocked": false})).await;
+    assert_eq!((st, &body["socialsLocked"]), (200, &json!(false)), "{body}");
+    let (st, body) = s.put("/v1/me/profile", Some(&alice), json!({"socials": {"discord": "alice.d"}})).await;
+    assert_eq!((st, body["socials"][0]["handle"].as_str()), (200, Some("alice.d")), "{body}");
+
+    assert_eq!(audits(&s, "user.lock_socials").await, vec![(actor.clone(), json!({"reason": null}))]);
+    assert_eq!(audits(&s, "user.unlock_socials").await.len(), 1);
+    assert_eq!(
+        audits(&s, "user.clear_socials").await,
+        vec![(actor, json!({"cleared": {"discord": "alice.d", "twitch": "alicetv"}}))]
+    );
+}

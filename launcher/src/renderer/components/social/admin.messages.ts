@@ -25,5 +25,11 @@ export const AdminMessages = {
   nameUnlocked: () => "Name unlocked: they can rename themselves. Click to lock.",
   lockName: () => "Lock name",
   unlockName: () => "Unlock name",
+  socialsLocked: () => "Socials locked: they can't add or change socials or connect Twitch. Click to unlock.",
+  socialsUnlocked: () => "Socials unlocked: they can change their socials. Click to lock.",
+  lockSocials: () => "Lock socials",
+  unlockSocials: () => "Unlock socials",
+  clearSocials: () => "Clear socials",
+  socialsCleared: () => "Clear socials on Apply",
   offline: () => "Offline",
 };

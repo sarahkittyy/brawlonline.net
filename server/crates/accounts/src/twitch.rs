@@ -228,8 +228,15 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
 }
 
 /// `POST /v1/me/twitch/connect`: the Twitch sign-in address for the launcher to open.
+/// 403 `socials_locked` while an admin has locked the account's socials (`pp-admin user lock-socials`).
 pub async fn connect(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<serde_json::Value>> {
     let user = current_user(&state, &headers).await?;
+    if user.socials_locked_at.is_some() {
+        return Err(ApiError::forbidden(
+            "socials_locked",
+            "Your social accounts can't be changed. Contact the admins.",
+        ));
+    }
     limit(&state, |l, now| l.profile_edit.check(&user.uid, now)).map_err(ApiError::rate_limited)?;
     let now = Instant::now();
     if fake_connects(&state) {
@@ -268,12 +275,18 @@ pub async fn connect(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
 pub async fn disconnect(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<StatusCode> {
     let user = current_user(&state, &headers).await?;
     sqlx::query("DELETE FROM twitch_links WHERE uid = $1").bind(user.uid).execute(&state.pool).await?;
-    let uid = user.uid.to_string();
+    forget(&state, user.uid);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Takes the account's stream out of the live list now (its Twitch connection is gone), rather
+/// than at the next refresh.
+pub fn forget(state: &AppState, uid: Uuid) {
+    let uid = uid.to_string();
     let mut streams = state.twitch.streams.write().unwrap();
     if streams.iter().any(|s| s.uid == uid) {
         *streams = Arc::new(streams.iter().filter(|s| s.uid != uid).cloned().collect());
     }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,6 +309,15 @@ pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQue
     };
     if !q.error.is_empty() || q.code.is_empty() {
         return failed(StatusCode::OK);
+    }
+    // Locked by an admin since the sign-in began.
+    match crate::store::user_by_uid(&state.pool, uid).await {
+        Ok(Some(u)) if u.socials_locked_at.is_none() => {}
+        Ok(_) => return failed(StatusCode::FORBIDDEN),
+        Err(e) => {
+            tracing::warn!(%uid, "reading the account for a twitch connect failed: {e}");
+            return failed(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
     let who =
         if fake_connects(&state) { fake_user(&state.pool, uid).await } else { sign_in_user(&state, &q.code).await };

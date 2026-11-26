@@ -8,7 +8,7 @@ import { useAccount } from "@/lib/hooks/use_account";
 import { usePlayerMenu } from "@/lib/social/use_player_menu";
 import { useSocial } from "@/lib/social/use_social";
 import { createServiceProvider } from "@/services";
-import type { AdminUser } from "@/services/backend/types";
+import type { AdminUser, AdminUserUpdate } from "@/services/backend/types";
 import type { Services } from "@/services/types";
 
 import { canonicalCode } from "./admin_rename_dialog";
@@ -23,6 +23,8 @@ function setup(opts: { admin: boolean; user?: Partial<AdminUser> }) {
     connectCode: "NESS#44",
     muted: false,
     nameLocked: false,
+    socialsLocked: false,
+    socials: [],
     banned: false,
     admin: false,
     ...opts.user,
@@ -31,12 +33,11 @@ function setup(opts: { admin: boolean; user?: Partial<AdminUser> }) {
     adminUser: vi.fn(async () => user),
     adminSetMuted: vi.fn(async (_uid: string, muted: boolean) => (user = { ...user, muted })),
     adminSetBanned: vi.fn(async (_uid: string, banned: boolean) => (user = { ...user, banned })),
-    adminUpdateUser: vi.fn(
-      async (_uid: string, u: { displayName?: string; connectCode?: string; nameLocked?: boolean }) => {
-        user = { ...user, ...u };
-        return user;
-      },
-    ),
+    adminUpdateUser: vi.fn(async (_uid: string, u: AdminUserUpdate) => {
+      const { clearSocials, ...rest } = u;
+      user = { ...user, ...rest, ...(clearSocials ? { socials: [] } : {}) };
+      return user;
+    }),
     adminCodeOwner: vi.fn(async (code: string) =>
       code === "LUCA#5" ? { code, uid: "lucas", displayName: "Lucas" } : { code, uid: null, displayName: null },
     ),
@@ -153,6 +154,38 @@ describe("PlayerMenu admin tools", () => {
       nameLocked: true,
     });
     await waitFor(() => expect(screen.queryByTestId("admin-rename")).toBeNull());
+  });
+});
+
+describe("PlayerMenu socials (admin)", () => {
+  it("lock and clear go with Apply, alone too; clear only when they have some", async () => {
+    const { backendService } = setup({
+      admin: true,
+      user: { socials: [{ platform: "discord", display: "ness.d" }] },
+    });
+    fireEvent.click(screen.getByTestId("admin-rename-item"));
+    const clear = (await screen.findByTestId("admin-rename-socials-clear")) as HTMLButtonElement;
+    const lock = screen.getByTestId("admin-rename-socials-lock") as HTMLButtonElement;
+    const apply = screen.getByTestId("admin-rename-apply") as HTMLButtonElement;
+    await waitFor(() => expect(clear.disabled).toBe(false));
+    expect(apply.disabled).toBe(true);
+    fireEvent.click(lock);
+    fireEvent.click(clear);
+    expect(clear.getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(apply.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+    expect(backendService.adminUpdateUser).toHaveBeenCalledWith("ness", { socialsLocked: true, clearSocials: true });
+    await waitFor(() => expect(screen.queryByTestId("admin-rename")).toBeNull());
+  });
+
+  it("nothing to clear: the clear is off", async () => {
+    setup({ admin: true });
+    fireEvent.click(screen.getByTestId("admin-rename-item"));
+    const clear = (await screen.findByTestId("admin-rename-socials-clear")) as HTMLButtonElement;
+    await screen.findByDisplayValue("Ness");
+    expect(clear.disabled).toBe(true);
   });
 });
 

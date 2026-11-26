@@ -1,7 +1,8 @@
 //! The launcher's admin tools (`/v1/admin/...`): the same changes `pp-admin` makes (mute, rename,
-//! connect code, name lock, ban, room names), for an account with `users.role = 'admin'` only. Every
-//! change is audit-logged with the admin as the actor (`launcher:<their uid>`). mm and the social hub
-//! see them as they see `pp-admin`'s: with their next look at the changed accounts.
+//! connect code, name lock, socials lock and clear, ban, room names), for an account with
+//! `users.role = 'admin'` only. Every change is audit-logged with the admin as the actor
+//! (`launcher:<their uid>`). mm and the social hub see them as they see `pp-admin`'s: with their
+//! next look at the changed accounts.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -134,21 +135,46 @@ pub struct AdminUser {
     pub connect_code: String,
     pub muted: bool,
     pub name_locked: bool,
+    /// The player can't set social media accounts or connect Twitch (`pp-admin user lock-socials`).
+    pub socials_locked: bool,
+    /// The social media accounts on their profile, as it shows them (Twitch: the connected one).
+    pub socials: Vec<AdminSocial>,
     pub banned: bool,
     pub admin: bool,
 }
 
+/// One of [`AdminUser::socials`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AdminSocial {
+    /// `discord`, `twitter`, `twitch`, `youtube`, `tiktok` or `instagram`.
+    pub platform: &'static str,
+    /// As the profile shows it (`@name`, Discord's as it is).
+    pub display: String,
+}
+
 impl AdminUser {
-    fn of(u: &UserRow) -> Self {
-        AdminUser {
+    async fn of(state: &AppState, u: &UserRow) -> ApiResult<Self> {
+        let socials = crate::profile::socials_of(&state.pool, u.uid)
+            .await?
+            .into_iter()
+            .map(|s| AdminSocial { platform: s.platform, display: s.display })
+            .collect();
+        Ok(AdminUser {
             uid: u.uid,
             display_name: u.display_name.clone(),
             connect_code: u.connect_code.clone().unwrap_or_default(),
             muted: u.chat_muted_at.is_some(),
             name_locked: u.rename_locked_at.is_some(),
+            socials_locked: u.socials_locked_at.is_some(),
+            socials,
             banned: u.is_banned(),
             admin: u.role == "admin",
-        }
+        })
+    }
+
+    /// The account `uid` as it is now.
+    async fn now(state: &AppState, uid: &str) -> ApiResult<Json<Self>> {
+        Ok(Json(AdminUser::of(state, &target(state, uid).await?).await?))
     }
 }
 
@@ -172,7 +198,7 @@ pub async fn user(
     Path(uid): Path<String>,
 ) -> ApiResult<Json<AdminUser>> {
     require_admin(&state, &headers).await?;
-    Ok(Json(AdminUser::of(&target(&state, &uid).await?)))
+    AdminUser::now(&state, &uid).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,7 +223,7 @@ pub async fn set_muted(
     store::set_muted(&state.pool, u.uid, req.muted).await?;
     let action = if req.muted { "user.mute" } else { "user.unmute" };
     store::audit(&state.pool, &actor(&admin), action, Some(&u.uid.to_string()), serde_json::json!({})).await?;
-    Ok(Json(AdminUser::of(&target(&state, &uid).await?)))
+    AdminUser::now(&state, &uid).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,7 +260,7 @@ pub async fn set_banned(
         store::audit(&state.pool, &actor(&admin), "user.unban", Some(&u.uid.to_string()), serde_json::json!({}))
             .await?;
     }
-    Ok(Json(AdminUser::of(&target(&state, &uid).await?)))
+    AdminUser::now(&state, &uid).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -245,12 +271,20 @@ pub struct UpdateUserReq {
     pub connect_code: Option<String>,
     /// Whether the player may rename themselves (`pp-admin user lock-name` / `unlock-name`).
     pub name_locked: Option<bool>,
+    /// Whether the player may set their social media accounts and connect Twitch (`pp-admin user
+    /// lock-socials` / `unlock-socials`).
+    pub socials_locked: Option<bool>,
+    /// true: remove every social media account from their profile and their Twitch connection
+    /// (`pp-admin user clear-socials`).
+    #[serde(default)]
+    pub clear_socials: bool,
 }
 
-/// `PUT /v1/admin/users/{uid}` `{displayName?, connectCode?, nameLocked?}`: renames the account,
-/// gives it another connect code and locks or unlocks its name, all at once or none (`pp-admin user
-/// rename`, `set-code`, `lock-name`). A field left out stays. 400 `invalid_display_name` /
-/// `invalid_connect_code`, 409 `code_taken` (with who has it).
+/// `PUT /v1/admin/users/{uid}` `{displayName?, connectCode?, nameLocked?, socialsLocked?,
+/// clearSocials?}`: renames the account, gives it another connect code, locks or unlocks its name
+/// and its socials and clears its socials, all at once or none (`pp-admin user rename`, `set-code`,
+/// `lock-name`, `lock-socials`, `clear-socials`). A field left out stays. 400
+/// `invalid_display_name` / `invalid_connect_code`, 409 `code_taken` (with who has it).
 pub async fn update_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -278,6 +312,7 @@ pub async fn update_user(
         }
     }
     let lock = req.name_locked.filter(|l| *l != u.rename_locked_at.is_some());
+    let socials_lock = req.socials_locked.filter(|l| *l != u.socials_locked_at.is_some());
 
     let mut tx = state.pool.begin().await?;
     if let Some(n) = &name {
@@ -311,6 +346,20 @@ pub async fn update_user(
         .execute(&mut *tx)
         .await?;
     }
+    if let Some(l) = socials_lock {
+        sqlx::query(
+            "UPDATE users SET socials_locked_at = CASE WHEN $2 THEN COALESCE(socials_locked_at, now()) END
+              WHERE uid = $1",
+        )
+        .bind(u.uid)
+        .bind(l)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let cleared = match req.clear_socials {
+        true => Some(crate::profile::clear_socials(&mut tx, u.uid).await?),
+        false => None,
+    };
     let actor = actor(&admin);
     let target_uid = u.uid.to_string();
     let audit = |action: &'static str, detail: serde_json::Value| {
@@ -340,8 +389,30 @@ pub async fn update_user(
         }
         None => {}
     }
+    match socials_lock {
+        Some(true) => {
+            audit("user.lock_socials", serde_json::json!({"reason": null})).execute(&mut *tx).await?;
+        }
+        Some(false) => {
+            audit("user.unlock_socials", serde_json::json!({})).execute(&mut *tx).await?;
+        }
+        None => {}
+    }
+    if let Some(c) = &cleared {
+        audit("user.clear_socials", cleared_detail(c)).execute(&mut *tx).await?;
+    }
     tx.commit().await?;
-    Ok(Json(AdminUser::of(&target(&state, &uid).await?)))
+    if cleared.is_some() {
+        crate::twitch::forget(&state, u.uid);
+    }
+    AdminUser::now(&state, &uid).await
+}
+
+/// The audit detail of a `user.clear_socials`: `{"cleared": {platform: handle}}`.
+pub fn cleared_detail(cleared: &crate::profile::Cleared) -> serde_json::Value {
+    let map: serde_json::Map<String, serde_json::Value> =
+        cleared.iter().map(|(p, h)| (p.to_string(), serde_json::Value::String(h.clone()))).collect();
+    serde_json::json!({ "cleared": map })
 }
 
 fn code_taken(code: &str, other: &UserRow) -> ApiError {

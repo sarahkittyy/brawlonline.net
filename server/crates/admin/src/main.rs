@@ -333,6 +333,25 @@ enum UserCmd {
     UnlockName {
         ident: String,
     },
+    /// Stop the account from setting or changing the social media accounts on its profile and from
+    /// connecting Twitch, until `unlock-socials` (it can still remove them). What it has stays
+    /// (`clear-socials` removes it).
+    LockSocials {
+        ident: String,
+        /// Why (kept in audit_log).
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Lift a `lock-socials`.
+    UnlockSocials {
+        ident: String,
+    },
+    /// Remove every social media account from the account's profile and its Twitch connection
+    /// (its stream leaves the live list within a minute). Prints what was removed (also kept in
+    /// audit_log). The player can set them again unless `lock-socials`.
+    ClearSocials {
+        ident: String,
+    },
     /// Set the account's role: `admin` may write the blog (brawlonline.net/blog/write/) and,
     /// later, whatever else the website's admin pages offer; `user` is everyone else.
     Role {
@@ -471,6 +490,10 @@ fn print_user(u: &UserRow) {
     match u.rename_locked_at {
         Some(t) => println!("name locked:    since {}", t.format("%Y-%m-%d %H:%M UTC")),
         None => println!("name locked:    no"),
+    }
+    match u.socials_locked_at {
+        Some(t) => println!("socials locked: since {}", t.format("%Y-%m-%d %H:%M UTC")),
+        None => println!("socials locked: no"),
     }
 }
 
@@ -900,6 +923,14 @@ async fn main() -> anyhow::Result<()> {
             let (pplus, mods) = admin::room_names(&pool, u.uid).await?;
             println!("room name:      {}", room_name(&pplus));
             println!("mods room name: {}", room_name(&mods));
+            let socials = accounts::profile::socials_of(&pool, u.uid).await?;
+            if socials.is_empty() {
+                println!("socials:        none");
+            }
+            for (i, s) in socials.iter().enumerate() {
+                let label = if i == 0 { "socials:" } else { "" };
+                println!("{label:<15} {} {}", s.platform, s.display);
+            }
         }
         Cmd::Room(RoomCmd::List { mm_status_url }) => print_rooms(&pool, &mm_status_url).await?,
         Cmd::Room(RoomCmd::Rename { target, name, mods, mm_status_url }) => {
@@ -1066,6 +1097,60 @@ async fn main() -> anyhow::Result<()> {
                 u.connect_code.as_deref().unwrap_or("-"),
                 if u.rename_locked_at.is_none() { "; it was not locked" } else { "" }
             );
+        }
+        Cmd::User(UserCmd::LockSocials { ident, reason }) => {
+            let u = find(&pool, &ident).await?;
+            store::set_socials_locked(&pool, u.uid, true).await?;
+            store::audit(
+                &pool,
+                &actor,
+                "user.lock_socials",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"reason": reason}),
+            )
+            .await?;
+            println!(
+                "{} ({}) can no longer change their socials or connect Twitch{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.socials_locked_at.is_some() { "; they already were locked" } else { "" }
+            );
+        }
+        Cmd::User(UserCmd::UnlockSocials { ident }) => {
+            let u = find(&pool, &ident).await?;
+            store::set_socials_locked(&pool, u.uid, false).await?;
+            store::audit(&pool, &actor, "user.unlock_socials", Some(&u.uid.to_string()), serde_json::json!({})).await?;
+            println!(
+                "{} ({}) can change their socials again{}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.socials_locked_at.is_none() { "; they were not locked" } else { "" }
+            );
+        }
+        Cmd::User(UserCmd::ClearSocials { ident }) => {
+            let u = find(&pool, &ident).await?;
+            let mut tx = pool.begin().await?;
+            let cleared = accounts::profile::clear_socials(&mut tx, u.uid).await?;
+            sqlx::query("INSERT INTO audit_log (actor, action, target, detail) VALUES ($1, $2, $3, $4)")
+                .bind(&actor)
+                .bind("user.clear_socials")
+                .bind(u.uid.to_string())
+                .bind(sqlx::types::Json(accounts::admin::cleared_detail(&cleared)))
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            let who = format!("{} ({})", u.display_name, u.connect_code.as_deref().unwrap_or("-"));
+            if cleared.is_empty() {
+                println!("{who} had no socials");
+            } else {
+                println!("removed {who}'s socials:");
+                for (platform, handle) in &cleared {
+                    println!("  {platform:<13} {handle}");
+                }
+            }
+            if u.socials_locked_at.is_none() {
+                println!("they can set them again (lock-socials stops that)");
+            }
         }
         Cmd::User(UserCmd::Role { ident, role }) => {
             let u = find(&pool, &ident).await?;
