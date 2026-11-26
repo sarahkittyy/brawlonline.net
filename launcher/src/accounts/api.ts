@@ -9,6 +9,7 @@ import {
   ipc_accountsAdminUser,
   ipc_accountsBrowseRulesets,
   ipc_accountsChangeEmail,
+  ipc_accountsChangelogs,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsFriendsLeaderboard,
@@ -155,6 +156,9 @@ const accountsApi: AccountsApi = {
   },
   async latestChangelog() {
     return unwrap(await ipc_accountsLatestChangelog.renderer!.trigger({}));
+  },
+  async changelogs(query) {
+    return unwrap(await ipc_accountsChangelogs.renderer!.trigger(query));
   },
   async browseRulesets(query) {
     return unwrap(await ipc_accountsBrowseRulesets.renderer!.trigger(query));

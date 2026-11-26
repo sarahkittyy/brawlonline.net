@@ -8,11 +8,12 @@
 //! Staging only: the board's "show on staging" publishes its draft as an `every_start` changelog,
 //! which staging launchers show at every start.
 //!
-//! Every changelog stays in the table as the history; only the newest is served for now.
+//! Every changelog stays in the table as the history. The launcher pages through it as a feed
+//! (`GET /v1/changelogs`); `GET /v1/changelogs/latest` is the newest alone, for older launchers.
 
 use std::path::Path;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -22,6 +23,8 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use crate::blog::{render, sniff_media, valid_media_name};
+use crate::cursor;
+use crate::error::{ApiError, ApiResult};
 use crate::AppState;
 
 /// The longest changelog's Markdown.
@@ -228,6 +231,114 @@ pub async fn latest(State(state): State<AppState>) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// A page of the feed by default, and at most.
+const PAGE_DEFAULT_LIMIT: u32 = 2;
+const PAGE_MAX_LIMIT: u32 = 5;
+
+#[derive(Debug, Deserialize)]
+pub struct PageQuery {
+    pub limit: Option<u32>,
+    /// Only changelogs published before this time (RFC 3339): a launcher's build time, as one
+    /// written for a release still to come waits for that release. Ignored with `after`.
+    pub before: Option<String>,
+    /// The `next` of the page before.
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ChangelogPage {
+    /// Newest first; on the first page, the staging-only one ahead of them.
+    pub changelogs: Vec<LatestChangelog>,
+    /// Pass as `after` for the next page; null on the last.
+    pub next: Option<String>,
+}
+
+fn page_cursor(r: &ChangelogRow) -> String {
+    cursor::encode("c1", &[&r.published_at.timestamp_micros().to_string(), &r.id.to_string()])
+}
+
+fn parse_page_cursor(c: &str) -> Option<(DateTime<Utc>, i64)> {
+    let f = cursor::decode("c1", c, 2)?;
+    Some((DateTime::from_timestamp_micros(f[0].parse().ok()?)?, f[1].parse().ok()?))
+}
+
+fn shown(r: ChangelogRow) -> LatestChangelog {
+    LatestChangelog {
+        id: r.id,
+        html: render(&r.body_md).html,
+        published_at: r.published_at,
+        every_start: r.every_start,
+    }
+}
+
+/// `GET /v1/changelogs?limit=&before=&after=` (public): every changelog, newest first, in pages
+/// (`next`), for the launcher's feed of patch notes. The first page (no `after`) starts with the
+/// staging-only one if there is one, whatever `before` says. 400 `bad_cursor` / `bad_before`.
+pub async fn page(State(state): State<AppState>, Query(q): Query<PageQuery>) -> ApiResult<Response> {
+    let n = cursor::page_limit(q.limit, PAGE_DEFAULT_LIMIT, PAGE_MAX_LIMIT) as i64;
+    let after = match q.after.as_deref() {
+        Some(c) => Some(parse_page_cursor(c).ok_or_else(|| ApiError::bad_request("bad_cursor", "Bad cursor"))?),
+        None => None,
+    };
+    let before = match q.before.as_deref().filter(|_| after.is_none()) {
+        Some(t) => Some(
+            DateTime::parse_from_rfc3339(t)
+                .map_err(|_| ApiError::bad_request("bad_before", "Bad time"))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+    let mut rows = match after {
+        Some((at, id)) => {
+            sqlx::query_as::<_, ChangelogRow>(
+                "SELECT id, body_md, published_at, every_start FROM changelogs \
+                 WHERE NOT every_start AND (published_at, id) < ($1, $2) \
+                 ORDER BY published_at DESC, id DESC LIMIT $3",
+            )
+            .bind(at)
+            .bind(id)
+            .bind(n + 1)
+            .fetch_all(&state.pool)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, ChangelogRow>(
+                "SELECT id, body_md, published_at, every_start FROM changelogs \
+                 WHERE NOT every_start AND ($1::timestamptz IS NULL OR published_at < $1) \
+                 ORDER BY published_at DESC, id DESC LIMIT $2",
+            )
+            .bind(before)
+            .bind(n + 1)
+            .fetch_all(&state.pool)
+            .await
+        }
+    }
+    .map_err(ApiError::internal)?;
+    let next = if rows.len() > n as usize {
+        rows.truncate(n as usize);
+        rows.last().map(page_cursor)
+    } else {
+        None
+    };
+    let mut changelogs = Vec::with_capacity(rows.len() + 1);
+    if after.is_none() {
+        let every: Option<ChangelogRow> = sqlx::query_as(
+            "SELECT id, body_md, published_at, every_start FROM changelogs WHERE every_start \
+             ORDER BY published_at DESC, id DESC LIMIT 1",
+        )
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+        changelogs.extend(every.map(shown));
+    }
+    changelogs.extend(rows.into_iter().map(shown));
+    Ok((
+        [(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"))],
+        Json(ChangelogPage { changelogs, next }),
+    )
+        .into_response())
 }
 
 #[cfg(test)]

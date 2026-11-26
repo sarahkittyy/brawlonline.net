@@ -10,6 +10,8 @@ import type {
   AdminUserUpdate,
   BugReportCreated,
   BugReportRequest,
+  ChangelogPage,
+  ChangelogPageQuery,
   LatestChangelog,
   LauncherSettings,
   LeaderboardPage,
@@ -232,6 +234,10 @@ export class AccountsHttpClient {
   async latestChangelog(): Promise<LatestChangelog | null> {
     const res = await this._request<{ changelog: LatestChangelog | null }>("GET", "/v1/changelogs/latest", {});
     return res.changelog ?? null;
+  }
+
+  changelogs(query: ChangelogPageQuery): Promise<ChangelogPage> {
+    return this._request("GET", `/v1/changelogs${queryString(query)}`, {});
   }
 
   browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage> {

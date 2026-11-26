@@ -11,6 +11,8 @@ import type {
   AdminUserUpdate,
   BugReportRequest,
   BugReportSent,
+  ChangelogPage,
+  ChangelogPageQuery,
   LatestChangelog,
   LauncherSettings,
   LeaderboardPage,
@@ -261,6 +263,10 @@ export class AccountsManager {
 
   latestChangelog(): Promise<AccountsResult<LatestChangelog | null>> {
     return wrap(() => this.client.latestChangelog());
+  }
+
+  changelogs(query: ChangelogPageQuery): Promise<AccountsResult<ChangelogPage>> {
+    return wrap(() => this.client.changelogs(query));
   }
 
   browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<AccountsResult<RulesetPage>> {

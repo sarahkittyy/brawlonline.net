@@ -9,6 +9,8 @@ import type {
   AdminPlayer,
   AdminUser,
   AdminUserUpdate,
+  ChangelogPage,
+  ChangelogPageQuery,
   LatestChangelog,
   LauncherSettings,
   LeaderboardPage,
@@ -197,6 +199,12 @@ export const ipc_accountsLatestChangelog = makeEndpoint.main(
   "accounts_latestChangelog",
   <Record<never, never>>_,
   <R<LatestChangelog | null>>_,
+);
+
+export const ipc_accountsChangelogs = makeEndpoint.main(
+  "accounts_changelogs",
+  <ChangelogPageQuery>_,
+  <R<ChangelogPage>>_,
 );
 
 export const ipc_accountsBrowseRulesets = makeEndpoint.main(

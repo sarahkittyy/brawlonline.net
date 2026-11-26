@@ -17,6 +17,7 @@ import {
   ipc_accountsAdminUser,
   ipc_accountsBrowseRulesets,
   ipc_accountsChangeEmail,
+  ipc_accountsChangelogs,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsFriendsLeaderboard,
@@ -117,6 +118,9 @@ export default function setupAccountsIpc() {
   );
   ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
   ipc_accountsLatestChangelog.main!.handle(async () => await manager.latestChangelog());
+  ipc_accountsChangelogs.main!.handle(
+    async ({ limit, before, after }) => await manager.changelogs({ limit, before, after }),
+  );
   ipc_accountsBrowseRulesets.main!.handle(
     async ({ q, limit, after }) => await manager.browseRulesets({ q, limit, after }),
   );

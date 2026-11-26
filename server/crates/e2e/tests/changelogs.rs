@@ -86,3 +86,61 @@ async fn changelogs_publish_and_latest() {
 
     let _ = std::fs::remove_dir_all(&media_dir);
 }
+
+/// The launcher's feed (`GET /v1/changelogs`): newest first in pages, the staging-only one ahead on
+/// the first page, and `before` (a launcher's build time) leaving out the ones for a release to come.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changelogs_feed_pages() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let media_dir = std::env::temp_dir().join(format!("pp-e2e-changelog-feed-{}", std::process::id()));
+    let ids = |v: &serde_json::Value| -> Vec<i64> {
+        v["changelogs"].as_array().unwrap().iter().map(|c| c["id"].as_i64().unwrap()).collect()
+    };
+
+    let (st, page) = s.get("/v1/changelogs", None).await;
+    assert_eq!(st, 200, "{page}");
+    assert!(ids(&page).is_empty() && page["next"].is_null(), "{page}");
+
+    let now = chrono::Utc::now();
+    let mut published = Vec::new();
+    for (i, mins) in [50, 40, 30, 20, 10].into_iter().enumerate() {
+        let md = format!("# Launcher 0.2.{}", 5 + i);
+        let at = Some(now - chrono::Duration::minutes(mins));
+        published.push(changelog::publish_at(&s.pool, &media_dir, &md, &[], false, at).await.unwrap());
+    }
+    let id = |i: usize| published[i].id;
+
+    // Pages of 2, newest first, until `next` is null.
+    let (_, p1) = s.get("/v1/changelogs?limit=2", None).await;
+    assert_eq!(ids(&p1), vec![id(4), id(3)], "{p1}");
+    assert!(p1["changelogs"][0]["html"].as_str().unwrap().contains("Launcher 0.2.9"), "{p1}");
+    let next = p1["next"].as_str().unwrap();
+    let (_, p2) = s.get(&format!("/v1/changelogs?limit=2&after={next}"), None).await;
+    assert_eq!(ids(&p2), vec![id(2), id(1)], "{p2}");
+    let next = p2["next"].as_str().unwrap();
+    let (_, p3) = s.get(&format!("/v1/changelogs?limit=2&after={next}"), None).await;
+    assert_eq!(ids(&p3), vec![id(0)], "{p3}");
+    assert!(p3["next"].is_null(), "{p3}");
+
+    // A launcher built 15 minutes ago: the newest is for a release to come, so its feed starts
+    // below it (one updated from 0.2.7 sees 0.2.8's notes first even once 0.2.9's are out).
+    let built = (now - chrono::Duration::minutes(15)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let (_, b) = s.get(&format!("/v1/changelogs?limit=2&before={built}"), None).await;
+    assert_eq!(ids(&b), vec![id(3), id(2)], "{b}");
+
+    // Staging's every-start one leads the first page only, whatever `before` says.
+    let e = changelog::publish(&s.pool, &media_dir, "draft", &[], true).await.unwrap();
+    let (_, b) = s.get(&format!("/v1/changelogs?limit=2&before={built}"), None).await;
+    assert_eq!(ids(&b), vec![e.id, id(3), id(2)], "{b}");
+    assert_eq!(b["changelogs"][0]["everyStart"], true);
+    let (_, b2) = s.get(&format!("/v1/changelogs?limit=2&after={}", b["next"].as_str().unwrap()), None).await;
+    assert_eq!(ids(&b2), vec![id(1), id(0)], "{b2}");
+
+    // Refused: a cursor it didn't give out, a time that isn't one.
+    let (st, _) = s.get("/v1/changelogs?after=nope", None).await;
+    assert_eq!(st, 400);
+    let (st, _) = s.get("/v1/changelogs?before=yesterday", None).await;
+    assert_eq!(st, 400);
+
+    let _ = std::fs::remove_dir_all(&media_dir);
+}

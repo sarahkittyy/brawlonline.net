@@ -243,6 +243,7 @@ pub fn router(state: AppState) -> Router {
         .route("/blog/blog.css", get(profile::site_file))
         .route("/blog/write/", get(profile::site_file))
         .route("/blog/write/{file}", get(profile::site_file))
+        .route("/v1/changelogs", get(changelog::page))
         .route("/v1/changelogs/latest", get(changelog::latest))
         .route("/login", get(blog::login_redirect))
         .route("/login/", get(profile::site_file))

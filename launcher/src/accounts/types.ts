@@ -521,6 +521,12 @@ export type LatestChangelog = {
   everyStart?: boolean;
 };
 
+/** A page of the changelog feed (`GET /v1/changelogs`): newest first; `next` is the `after` of the page after. */
+export type ChangelogPage = { changelogs: LatestChangelog[]; next: string | null };
+
+/** `GET /v1/changelogs`: `before` (ISO) leaves out the ones published after it; ignored with `after`. */
+export type ChangelogPageQuery = { limit?: number; before?: string; after?: string };
+
 export interface AccountsApi {
   /** Creates the account, stores its session and returns the user. */
   signUp(req: SignUpRequest): Promise<AccountsMe>;
@@ -584,6 +590,8 @@ export interface AccountsApi {
   ruleset(code: string): Promise<RulesetView>;
   /** The newest published launcher changelog (public); null when there is none. */
   latestChangelog(): Promise<LatestChangelog | null>;
+  /** A page of every published changelog, newest first (public); staging's every-start one leads the first. */
+  changelogs(query: ChangelogPageQuery): Promise<ChangelogPage>;
   /** A page of the public list (`q` searches the name, publisher and code). */
   browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage>;
   myRulesets(uid: string): Promise<MyRulesets>;
