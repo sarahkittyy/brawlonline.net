@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_QUICK_CHAT,
   limitQuickChatMessage,
   normalizeQuickChat,
   QUICK_CHAT_SLOTS,
@@ -38,5 +39,25 @@ describe("quick chat messages", () => {
     expect(file.version).toBe(1);
     expect(file.messages).toHaveLength(16);
     expect(file.messages[0]).toBe("gg wp");
+  });
+});
+
+describe("the default quick chat", () => {
+  it("is Slippi's on the same directions, with Right, Down changed", () => {
+    // slippi-launcher default_chat_messages.ts: group then message, each up, left, right, down.
+    const slippi = [
+      ["ggs", "one more", "brb", "good luck"],
+      ["well played", "that was fun", "thanks", "too good"],
+      ["sorry", "my b", "lol", "wow"],
+      ["gotta go", "one sec", "let's play again later", "bad connection"],
+    ];
+    const order = ["up", "left", "right", "down"] as const;
+    order.forEach((group, g) =>
+      order.forEach((direction, d) => {
+        const ours = DEFAULT_QUICK_CHAT[quickChatIndex(group, direction)];
+        expect(ours).toBe(group === "right" && direction === "down" ? "nerf jigglypuff" : slippi[g][d]);
+      }),
+    );
+    expect(normalizeQuickChat(DEFAULT_QUICK_CHAT)).toEqual([...DEFAULT_QUICK_CHAT]);
   });
 });

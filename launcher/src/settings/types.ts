@@ -59,7 +59,7 @@ export interface SettingsSchema {
   disableChat: boolean;
 
   // Settings > Social > Quick Chat (common/quick_chat.ts): the 16 D-pad messages, group then direction,
-  // "" for none. Written to the netplay online folder's quick-chat.json, which a running game re-reads.
+  // "" for none (DEFAULT_QUICK_CHAT until the player changes one). Written to the netplay online folder's quick-chat.json, which a running game re-reads.
   quickChat: string[];
 
   // "Potato mode": matches draw less (no shadows, no stage backgrounds) for a PC that can't hold

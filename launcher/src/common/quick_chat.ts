@@ -1,8 +1,8 @@
 /**
  * Quick chat (docs/design/quick-chat.md; Settings > Social): 16 messages sent with a GameCube
  * controller's D-pad on the online CSS. The first press opens that direction's group of four, the
- * second sends the message in its direction. All empty by default (the D-pad then moves the CSS's
- * hand as always).
+ * second sends the message in its direction. Everyone starts with DEFAULT_QUICK_CHAT (Slippi's 16,
+ * with Sarah's one change); a player who clears them all gets the D-pad back for the CSS's hand.
  *
  * The game reads them from `quick-chat.json` in the netplay User folder's online folder (core
  * Online/QuickChat.h): `{"version": 1, "messages": [16 strings]}`, message `4 * group + direction`,
@@ -22,6 +22,35 @@ export const QUICK_CHAT_MAX_CHARACTERS = 100;
 export const QUICK_CHAT_MAX_BYTES = 300;
 
 export const EMPTY_QUICK_CHAT: readonly string[] = Object.freeze(Array<string>(QUICK_CHAT_SLOTS).fill(""));
+
+/**
+ * The messages everyone starts with (Sarah's board, 2026-11-26: "code in the binds i have set in this menu as the
+ * "defaults" for everyone. i only changed one"): Slippi's defaults (slippi-launcher default_chat_messages.ts, on
+ * the same directions: Slippi numbers them up, left, right, down) with Right, Down "nerf jigglypuff" for Slippi's
+ * "wow". Group by group, clockwise from up: up, right, down, left.
+ */
+export const DEFAULT_QUICK_CHAT: readonly string[] = Object.freeze([
+  // Up
+  "ggs",
+  "brb",
+  "good luck",
+  "one more",
+  // Right
+  "sorry",
+  "lol",
+  "nerf jigglypuff",
+  "my b",
+  // Down
+  "gotta go",
+  "let's play again later",
+  "bad connection",
+  "one sec",
+  // Left
+  "well played",
+  "thanks",
+  "too good",
+  "that was fun",
+]);
 
 export function quickChatIndex(group: QuickChatDirection, direction: QuickChatDirection): number {
   return 4 * QUICK_CHAT_DIRECTIONS.indexOf(group) + QUICK_CHAT_DIRECTIONS.indexOf(direction);
