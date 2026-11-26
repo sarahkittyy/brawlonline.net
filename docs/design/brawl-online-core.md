@@ -302,6 +302,8 @@ On the way: the joiner test failed three times with game 1 over at frame ~1,690 
 
 Strings: none added (no UI changed).
 
+**Music off (2026-11-26).** The launcher's Music setting is `[Online] Music`. Off, Dolphin applies P+'s `[P+] Music Off` patch at every retrace (PatchEngine `IsEnabledMusicCode`), which writes 0 into the music volume float at `0x90E60F34`. That address is outside the region set, so only this PC goes quiet. The recomp's core read the key, but nothing in the recomp applied the patch, so its music always played (Sarah's board: "music toggle in the launcher doesnt work for emissary"). Since EmissaryRecomp dad97d4 (`brawlonline/windows-build`), `CoreLoopTop` writes that 0 at every loop top while Music is off. Checked with a harness read of the float in the menus and in a local match: the recomp before the change read 1.0 with Music off. With the change, Music off reads 0.0 and Music on reads 1.0, as in Dolphin.
+
 ### 10.5 Input suggestions in the recomp (2026-11-26)
 
 Sarah's board: "has subframe rollback been ported into the recomp?" It had not: since the 11-23 merge the recomp's core had a stand-in that turned input suggestions (`docs/gameplay-rollback-status.md`, GitHub issue #35, Arte's "subframe rollback") off, so a recomp player sent none, used none and predicted every player with their last input. "we'll need it. work on it". Now a recomp player sends and uses them as a Dolphin player does, against Dolphins and against other recomps. EmissaryRecomp `brawlonline/windows-build` (the recomp's side, below).
