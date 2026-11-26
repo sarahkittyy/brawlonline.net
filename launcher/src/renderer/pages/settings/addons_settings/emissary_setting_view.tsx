@@ -1,7 +1,7 @@
 // Settings > Add-ons' EmissaryRecomp card (addons_settings.tsx): what is installed and the latest,
-// Download / Update / Prepare game files / Remove, the switch that plays Project+ with it (Settings >
-// Game's "Play Project+ with", mirrored) and the auto-update switch, those two on one line over the
-// buttons (docs/design/brawl-recompiled.md §4.1). Its words are Sarah's (board, 2026-11-24).
+// Download / Update / Prepare game files / Remove, the "Play Project+ with: Dolphin | EmissaryRecomp" bar
+// (Settings > Game's choice, mirrored; only once it is installed) and the auto-update switch, those two on
+// one line over the buttons (docs/design/brawl-recompiled.md §4.1). Its words are Sarah's (board, 2026-11-24).
 import { formatBytes } from "@common/disk_space";
 import type { EmissaryState } from "@dolphin/emissary/types";
 import { EMISSARY_AUTHOR } from "@dolphin/emissary/types";
@@ -13,6 +13,7 @@ import Button from "@mui/material/Button";
 import LinearProgress from "@mui/material/LinearProgress";
 import Link from "@mui/material/Link";
 import Tooltip from "@mui/material/Tooltip";
+import Typography from "@mui/material/Typography";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
@@ -20,6 +21,7 @@ import { TwoWayToggle } from "@/components/form/two_way_toggle";
 import hintStyles from "@/lib/emissary/emissary_hint.module.css";
 import { emissaryAction, emissaryJobPercent } from "@/lib/emissary/use_emissary";
 
+import { GameSettingsMessages } from "../game_settings/game_settings.messages";
 import { SettingItem } from "../setting_item_section";
 import { AddonsSettingsMessages as Messages } from "./addons_settings.messages";
 
@@ -143,20 +145,28 @@ export const EmissarySettingView = ({
 
         {state?.error && !job && <div style={{ marginTop: 8, color: "#f48a8a", fontSize: 13 }}>{state.error}</div>}
 
-        {/* Dolphin | Emissary and auto-update on one line, over the buttons (Sarah's board, card 797). */}
+        {/* "Play Project+ with" Dolphin | EmissaryRecomp and auto-update on one line, over the buttons (Sarah's
+            board, card 797). The bar only once it is installed: before that a player came to turn it on, and a
+            bare "Dolphin | Emissary" next to Download read as a choice to make first (a player: "which one do i
+            select to enable it? What does it mean to have "dolphin" selected when downloading emissary?").
+            Its first download turns it on (addons_settings.tsx). */}
         {supported && (
-          <div style={{ display: "flex", alignItems: "center", gap: 32, marginTop: 12, flexWrap: "wrap" }}>
-            <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
-              <div data-testid="emissary-play-with">
-                <TwoWayToggle
-                  left={Messages.playWithEmissaryOff()}
-                  right={Messages.playWithEmissaryOn()}
-                  value={playWithEmissary}
-                  onChange={onPlayWithEmissary}
-                  disabled={playWithDisabledReason != null}
-                />
-              </div>
-            </Tooltip>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px 32px", marginTop: 12, flexWrap: "wrap" }}>
+            {installed && (
+              <Tooltip title={playWithDisabledReason ?? ""} placement="bottom-start">
+                <div data-testid="emissary-play-with" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <Typography component="span">{GameSettingsMessages.playProjectPlusWith()}</Typography>
+                  <TwoWayToggle
+                    aria-label={GameSettingsMessages.playProjectPlusWith()}
+                    left={Messages.playWithEmissaryOff()}
+                    right={Messages.playWithEmissaryOn()}
+                    value={playWithEmissary}
+                    onChange={onPlayWithEmissary}
+                    disabled={playWithDisabledReason != null}
+                  />
+                </div>
+              </Tooltip>
+            )}
             <div data-testid="emissary-auto-update">
               <Toggle value={autoUpdate} onChange={onAutoUpdate} label={Messages.autoUpdate()} />
             </div>

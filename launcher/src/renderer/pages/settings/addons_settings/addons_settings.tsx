@@ -8,6 +8,7 @@ import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import {
   cancelEmissary,
+  emissaryAction,
   installEmissary,
   refreshEmissary,
   removeEmissary,
@@ -19,6 +20,7 @@ import { useEmissaryAutoUpdate, usePlayProjectPlusWith } from "@/lib/hooks/use_s
 import { useToasts } from "@/lib/hooks/use_toasts";
 
 import { GameSettingsMessages } from "../game_settings/game_settings.messages";
+import { emissaryUsable } from "../game_settings/play_project_plus_with_view";
 import { TrainingSettings } from "../training_settings/training_settings";
 import { AddonsSettingsMessages as Messages } from "./addons_settings.messages";
 import { EmissarySettingView } from "./emissary_setting_view";
@@ -42,6 +44,18 @@ export const AddonsSettings = React.memo(function AddonsSettings() {
     useEmissaryHint.getState().markSeen();
   }, []);
 
+  // Its first download here is the player turning it on: once it can play, Play Project+ with says EmissaryRecomp
+  // (a player: "I went here to enable it, but which one do i select to enable it?"). An update or the game files
+  // again leave the choice alone, and so does an open game (the choice is locked then). The install goes on in main
+  // with the page closed, and this still runs then.
+  const get = async () => {
+    const first = emissaryAction(state) === "download";
+    await installEmissary();
+    if (first && emissaryUsable(useEmissary.getState().state) && !useDolphinStore.getState().netplayOpened) {
+      await setPlayWith("emissary").catch(showError);
+    }
+  };
+
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -60,7 +74,7 @@ export const AddonsSettings = React.memo(function AddonsSettings() {
         state={state}
         autoUpdate={autoUpdate}
         busy={busy}
-        onGet={() => void installEmissary()}
+        onGet={() => void get()}
         onCancel={cancelEmissary}
         onRemove={() => setConfirmRemove(true)}
         onOpenFolder={() => state && void window.electron.shell.openPath(state.folder)}

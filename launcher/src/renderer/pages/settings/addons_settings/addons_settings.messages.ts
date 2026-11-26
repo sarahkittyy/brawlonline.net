@@ -8,8 +8,8 @@ export const AddonsSettingsMessages = {
   emissaryDescription: () =>
     'Play P+ as a native PC program instead of Dolphin. Uses Brawl Online\'s netcode, you can cross-play with Dolphin players. "Other Games" rooms still use Dolphin.',
   madeBy: () => "Made by",
-  // The card's Dolphin | Emissary bar: Settings > Game's "Play Project+ with", right = EmissaryRecomp.
-  playWithEmissaryOn: () => "Emissary",
+  // The card's "Play Project+ with" Dolphin | EmissaryRecomp bar: Settings > Game's choice, right = EmissaryRecomp.
+  playWithEmissaryOn: () => "EmissaryRecomp",
   playWithEmissaryOff: () => "Dolphin",
   installed: () => "Installed",
   latest: () => "Latest",
