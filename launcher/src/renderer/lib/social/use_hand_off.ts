@@ -1,9 +1,10 @@
 import { CREATE_ROOM, isQueueTarget, QUEUE_RANKED, QUEUE_TWOS } from "@dolphin/hand_off_target";
 import log from "electron-log";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { SocialMessages as Messages } from "@/components/social/social.messages";
 import { usePlay } from "@/lib/dolphin/use_play";
+import type { EmissaryResume } from "@/lib/emissary/use_emissary_dialog";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
 
@@ -13,14 +14,18 @@ import { useServices } from "@/services";
  * `QUEUE_RANKED`, `QUEUE_TWOS`), the way clicking a public room does (docs/rooms-protocol.md §5): a running game gets the code,
  * else the launcher leaves it for the game and starts it like Play. A create can carry a ruleset code
  * (docs/rulesets-protocol.md §4) and make the room private. Resolves to whether the game took it (or is starting with it).
+ * When starting it opens EmissaryRecomp's popup to set it up first, the popup's Play does this hand-off again
+ * (`resume`, by default this same call), so the room, invite or queue isn't lost to a plain Play.
  */
 export const useHandOff = () => {
   const { dolphinService } = useServices();
   const { showError, showInfo, showWarning } = useToasts();
   const play = usePlay();
+  // This hand-off as it is at the latest render, for EmissaryRecomp's popup to run again.
+  const handOffRef = useRef<HandOff>(async () => false);
 
-  return useCallback(
-    async (code: string, ruleset?: string, isPrivate?: boolean): Promise<boolean> => {
+  const handOff = useCallback(
+    async (code: string, ruleset?: string, isPrivate?: boolean, resume?: EmissaryResume): Promise<boolean> => {
       const kind =
         code === CREATE_ROOM ? "create" : isQueueTarget(code) ? "queue" : code.includes("#") ? "direct" : "room";
       const queue = code === QUEUE_RANKED ? "Ranked" : code === QUEUE_TWOS ? "2v2" : "Unranked";
@@ -64,7 +69,8 @@ export const useHandOff = () => {
             break;
           case "not-running": {
             const { id } = await dolphinService.prepareRoomLaunch(code, ruleset, isPrivate);
-            if (await play({ bootGame: true })) {
+            const again = resume ?? (() => handOffRef.current(code, ruleset, isPrivate));
+            if (await play({ bootGame: true, resume: again })) {
               showInfo(text.starting[kind]);
               return true;
             }
@@ -80,4 +86,8 @@ export const useHandOff = () => {
     },
     [dolphinService, play, showError, showInfo, showWarning],
   );
+  handOffRef.current = handOff;
+  return handOff;
 };
+
+type HandOff = (code: string, ruleset?: string, isPrivate?: boolean, resume?: EmissaryResume) => Promise<boolean>;

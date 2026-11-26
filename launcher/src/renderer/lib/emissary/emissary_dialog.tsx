@@ -1,5 +1,6 @@
 // EmissaryRecomp's popup, mounted once in app.tsx: Play opens it when Play Project+ with says EmissaryRecomp and it
-// can't play yet (use_play.ts, emissaryNeedsSetUp). Its Play button is Play's, once it is installed.
+// can't play yet (use_play.ts, emissaryNeedsSetUp). Its Play button, once it is installed, goes on with what opened it
+// (the room, invite, Create room or queue; else Play).
 import { EMISSARY_REPO_URL } from "@dolphin/emissary/types";
 import React, { useEffect, useState } from "react";
 
@@ -22,7 +23,8 @@ export const EmissaryDialog = React.memo(function EmissaryDialog() {
   const onPlay = async () => {
     setStarting(true);
     try {
-      if (await play()) {
+      const resume = useEmissaryDialog.getState().resume;
+      if (await (resume ? resume() : play())) {
         closeDialog();
       }
     } finally {

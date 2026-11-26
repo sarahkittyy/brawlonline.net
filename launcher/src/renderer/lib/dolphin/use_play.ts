@@ -1,11 +1,12 @@
 import { PRODUCT_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
 import { HeaderMessages as Messages } from "@/app/header/header.messages";
 import { emissaryNeedsSetUp, useEmissary } from "@/lib/emissary/use_emissary";
+import type { EmissaryResume } from "@/lib/emissary/use_emissary_dialog";
 import { useEmissaryDialog } from "@/lib/emissary/use_emissary_dialog";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppStore } from "@/lib/hooks/use_app_store";
@@ -24,12 +25,15 @@ export const usePlayDialogs = create(
   })),
 );
 
+type PlayOptions = { offlineOnly?: boolean; bootGame?: boolean; resume?: EmissaryResume };
+
 /**
  * The Play button's checks and launch (Slippi's `onPlay`): logged in and online, a play key on
  * disk, a valid disc image, then the netplay Dolphin. Resolves to whether the game was started;
  * when a check fails it shows its dialog or error, as the Play button does. `offlineOnly` skips the
  * account checks (Play offline); `bootGame` boots P+ even when the Play button is set to open
- * Dolphin only (a hand-off: an invite, a room, Create room).
+ * Dolphin only (a hand-off: an invite, a room, Create room). `resume` is what EmissaryRecomp's popup runs when it
+ * opens here and its Play is pressed (a hand-off's own retry); by default, this Play again.
  */
 export const usePlay = () => {
   const { dolphinService, backendService } = useServices();
@@ -43,8 +47,11 @@ export const usePlay = () => {
   const { launchNetplay } = useDolphinActions(dolphinService);
   const { setStartGameOpen, setActivateOnlineOpen } = usePlayDialogs();
 
-  return useCallback(
-    async ({ offlineOnly, bootGame }: { offlineOnly?: boolean; bootGame?: boolean } = {}): Promise<boolean> => {
+  // This Play as it is at the latest render: what EmissaryRecomp's popup runs by default, once it is set up.
+  const playRef = useRef<(options?: PlayOptions) => Promise<boolean>>(async () => false);
+
+  const play = useCallback(
+    async ({ offlineOnly, bootGame, resume }: PlayOptions = {}): Promise<boolean> => {
       if (!offlineOnly) {
         // Ensure user is logged in
         if (!currentUser || !isOnline) {
@@ -82,7 +89,7 @@ export const usePlay = () => {
 
       // Play with EmissaryRecomp before it is set up: its popup, with Download (Project Punch's, on Home), not Dolphin.
       if (playWith === "emissary" && emissaryNeedsSetUp(useEmissary.getState().state)) {
-        useEmissaryDialog.getState().openDialog();
+        useEmissaryDialog.getState().openDialog(resume ?? (() => playRef.current({ offlineOnly, bootGame })));
         return false;
       }
 
@@ -102,4 +109,6 @@ export const usePlay = () => {
       setActivateOnlineOpen,
     ],
   );
+  playRef.current = play;
+  return play;
 };

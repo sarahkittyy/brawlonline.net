@@ -16,7 +16,9 @@ const showInfo = vi.fn();
 const showWarning = vi.fn();
 vi.mock("@/lib/hooks/use_toasts", () => ({ useToasts: () => ({ showError, showInfo, showWarning }) }));
 
-const play = vi.fn(async () => true);
+const play = vi.fn<(options?: { bootGame?: boolean; resume?: () => Promise<boolean> }) => Promise<boolean>>(
+  async () => true,
+);
 vi.mock("@/lib/dolphin/use_play", () => ({ usePlay: () => play }));
 
 beforeEach(() => {
@@ -46,5 +48,36 @@ describe("useHandOff", () => {
 
     expect(showInfo).toHaveBeenCalledTimes(1);
     expect(showWarning).not.toHaveBeenCalled();
+  });
+
+  // Sarah's board: Create room, a room, an invite or Unranked with EmissaryRecomp not set up opened its popup, and its
+  // Play once the download was done only started the game, without going on to the room, invite or queue.
+  it("gives EmissaryRecomp's popup this hand-off to run again", async () => {
+    joinRoomInGame.mockResolvedValue({ outcome: "not-running" });
+    play.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useHandOff());
+
+    await expect(result.current("WXSC")).resolves.toBe(false);
+    expect(cancelRoomLaunch).toHaveBeenCalledWith("req");
+    const resume = play.mock.calls[0][0]?.resume;
+    expect(resume).toBeTypeOf("function");
+
+    // The popup's Play: the game isn't running yet, so the room is left for it again and the game starts.
+    await expect(resume!()).resolves.toBe(true);
+    expect(joinRoomInGame).toHaveBeenCalledTimes(2);
+    expect(prepareRoomLaunch).toHaveBeenCalledTimes(2);
+    expect(prepareRoomLaunch).toHaveBeenLastCalledWith("WXSC", undefined, undefined);
+    expect(play).toHaveBeenLastCalledWith(expect.objectContaining({ bootGame: true }));
+    expect(cancelRoomLaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands EmissaryRecomp's popup the caller's own retry when it has one", async () => {
+    joinRoomInGame.mockResolvedValue({ outcome: "not-running" });
+    play.mockResolvedValueOnce(false);
+    const retry = vi.fn(async () => true);
+    const { result } = renderHook(() => useHandOff());
+
+    await result.current("create", "R1", true, retry);
+    expect(play.mock.calls[0][0]?.resume).toBe(retry);
   });
 });
