@@ -71,7 +71,9 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -581,6 +583,154 @@ def client_env(cfg: dict, profile: Path) -> dict[str, str]:
         "PPO_UPDATES_URL": u["updates"],
         "PPO_DOLPHIN_EXTRA_ARGS": json.dumps(dolphin_args),
     }
+
+
+# Each client starts logged in to a staging account of its own (`run --account`, docs/staging.md
+# "Accounts"): Windows profiles a and b are Red and Blue, the Mac's a and b Yellow and Green, so
+# the board's runs (each on the next free profile) and its 2v2 are four different players. The
+# accounts are made in the staging database the first time one is used (email verified, rules
+# accepted, a connect code), password ACCOUNT_PASSWORD.
+STAGING_ACCOUNTS = ["Red", "Blue", "Yellow", "Green", "Orange", "Cyan", "Pink", "Purple",
+                    "Lime", "Teal", "Gold", "Silver", "Brown", "White", "Black", "Gray"]
+ACCOUNT_PASSWORD = "staging-pass"
+
+
+def profile_account(side: str, profile: str) -> str | None:
+    """The staging account a profile logs in to: a and b of each machine first (Windows 1-2, the
+    Mac 3-4), then c to h alternating (Windows c 5, Mac c 6, ...). None for other profile names."""
+    if len(profile) != 1 or not "a" <= profile <= "h":
+        return None
+    i, mac = ord(profile) - ord("a"), side == "mac"
+    n = i + (2 if mac else 0) if i < 2 else 4 + 2 * (i - 2) + mac
+    return STAGING_ACCOUNTS[n]
+
+
+def account_email(name: str) -> str:
+    return f"staging-{name.lower()}@staging.test"
+
+
+def psql(cfg: dict, sql: str) -> str:
+    """One statement's rows against the staging database (-A -t: `|`-separated, no header). A
+    connection that times out is tried once more (this PC's loopback connects stall at times)."""
+    for _ in range(2):
+        out = subprocess.run([str(PG_BIN / f"psql{EXE}"), "-h", "127.0.0.1", "-p", str(cfg["pg_port"]), "-U", "pp",
+                              "-d", "brawl_staging", "-v", "ON_ERROR_STOP=1", "-q", "-A", "-t", "-w", "-c", sql],
+                             env=dict(os.environ, PGPASSWORD=cfg["pg_password"], PGCONNECT_TIMEOUT="10"),
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        if out.returncode == 0 or "timeout expired" not in out.stderr:
+            break
+    if out.returncode != 0:
+        raise RuntimeError(f"psql: {out.stderr.strip()}")
+    return out.stdout.strip()
+
+
+def sql_str(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def accounts_api(cfg: dict, path: str, body: dict) -> tuple[int, dict]:
+    """A POST to the staging accounts server, tried twice: this PC's loopback connects stall at
+    times (a new one can hang for seconds)."""
+    req = lambda: urllib.request.Request(f"http://127.0.0.1:{cfg['accounts_port']}{path}",  # noqa: E731
+                                         data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req(), timeout=20) as r:
+                return r.status, json.loads(r.read() or b"null") or {}
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"null") or {}
+            except ValueError:
+                return e.code, {}
+        except OSError:
+            if attempt:
+                raise
+    raise AssertionError
+
+
+def set_account_password(cfg: dict, uid: str) -> None:
+    """ACCOUNT_PASSWORD on the account, hashed by the server itself: a password reset with a token
+    made here (sign-ups are limited per network, and the hash format is the server's business)."""
+    token = secrets.token_hex(16)
+    psql(cfg, f"INSERT INTO email_tokens (token_hash, uid, purpose, expires_at) VALUES "
+              f"(sha256({sql_str(token)}::bytea), {sql_str(uid)}, 'reset_password', now() + interval '10 minutes');")
+    status, body = accounts_api(cfg, "/v1/auth/password-reset/confirm", {"token": token, "newPassword": ACCOUNT_PASSWORD})
+    if status >= 300:
+        raise RuntimeError(f"setting the password: {status} {body}")
+
+
+def ensure_account(cfg: dict, name: str) -> None:
+    """The staging account `name`, made if it isn't there yet (its password: set_account_password)."""
+    email = account_email(name)
+    if psql(cfg, f"SELECT uid FROM users WHERE email = {sql_str(email)};"):
+        return
+    taken = set(psql(cfg, "SELECT connect_code FROM users WHERE connect_code IS NOT NULL;").split())
+    prefix = name[:4].upper()
+    code = next(f"{prefix}#{n}" for n in range(1, 10000) if f"{prefix}#{n}" not in taken)
+    uid = str(uuid.uuid4())
+    psql(cfg, "INSERT INTO users (uid, email, email_verified_at, pw_hash, display_name, connect_code, rules_version) "
+              f"VALUES ({sql_str(uid)}, {sql_str(email)}, now(), '!', {sql_str(name)}, {sql_str(code)}, 1);")
+    say(f"made the staging account {name} ({email}, {code}, password {ACCOUNT_PASSWORD})")
+
+
+def account_login(cfg: dict, name: str) -> dict | None:
+    """A new session on the staging account `name` (made first if needed): {uid, email,
+    displayName, token}, or None (said why) when the server can't give one: the client then
+    starts with whatever login its profile had."""
+    email = account_email(name)
+    login = {"email": email, "password": ACCOUNT_PASSWORD}
+    try:
+        # The login alone once the account is there: one connection, as this PC's own connects stall at times.
+        status, body = accounts_api(cfg, "/v1/auth/login", login)
+        if status == 401:  # not made yet, or made by a run that stopped before its password was set
+            ensure_account(cfg, name)
+            set_account_password(cfg, psql(cfg, f"SELECT uid FROM users WHERE email = {sql_str(email)};"))
+            status, body = accounts_api(cfg, "/v1/auth/login", login)
+        if status != 200 or not body.get("sessionToken"):
+            raise RuntimeError(f"login: {status} {body}")
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        say(f"warning: could not log the client in to {name} ({e}); it starts with the profile's own login")
+        return None
+    user = body["user"]
+    return {"uid": user["uid"], "email": user["email"], "displayName": user["displayName"],
+            "token": body["sessionToken"]}
+
+
+# Puts a login in a launcher profile (argv: the profile folder, base64 JSON from account_login):
+# Settings' accounts (multi_account.service.ts) list only that account, active, and sessions.json
+# (accounts/session_store.ts) holds its token as `plain:` (the launcher reads those as well as its
+# own keychain-encrypted ones). The rest of Settings is kept. Run by Python on either machine.
+LOGIN_SCRIPT = r"""
+import base64, datetime, json, os, sys
+p, a = sys.argv[1], json.loads(base64.b64decode(sys.argv[2]))
+os.makedirs(p, exist_ok=True)
+f = os.path.join(p, "Settings")
+d = json.load(open(f, encoding="utf-8")) if os.path.exists(f) and os.path.getsize(f) else {}
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+d["accounts"] = {"activeId": a["uid"], "list": [{"id": a["uid"], "email": a["email"], "displayName": a["displayName"],
+                                                 "displayPicture": "", "lastActive": now}]}
+json.dump(d, open(f, "w", encoding="utf-8"), indent=2)
+json.dump({"version": 1, "sessions": {a["uid"]: "plain:" + a["token"]}},
+          open(os.path.join(p, "sessions.json"), "w", encoding="utf-8"), indent=2)
+"""
+
+
+def login_payload(login: dict) -> str:
+    return base64.b64encode(json.dumps(login).encode()).decode()
+
+
+def run_account(args: argparse.Namespace, side: str) -> str | None:
+    """The account `run` logs the profile in to: --account (a name, or `none`), else the profile's
+    own (profile_account), except with --fresh, whose first start signs up or logs in by hand."""
+    if args.account:
+        if args.account.lower() == "none":
+            return None
+        name = next((n for n in STAGING_ACCOUNTS if n.lower() == args.account.lower()), None)
+        if not name:
+            die(f"--account: one of {', '.join(STAGING_ACCOUNTS)}, or none")
+        return name
+    return None if args.fresh else profile_account(side, args.profile)
 
 
 # Port 1 of a client (`run --controls`). Written into its netplay Dolphin's own Dolphin.ini, not
@@ -1123,6 +1273,11 @@ def win_run(args: argparse.Namespace) -> None:
         win_reset(args)
     profile.mkdir(parents=True, exist_ok=True)
     seed_pplus_win(profile)
+    account = run_account(args, "win")
+    login = account_login(cfg, account) if account else None
+    if login:
+        subprocess.run([sys.executable, "-c", LOGIN_SCRIPT, str(profile), login_payload(login)], check=True)
+        say(f"logged in to {account} ({login['email']})")
     env = dict(os.environ, **client_env(cfg, profile))
     if args.controls:
         set_win_controls(profile, args.controls)
@@ -1517,8 +1672,16 @@ def mac_run(args: argparse.Namespace) -> None:
                   'os.makedirs(os.path.dirname(p), exist_ok=True); json.dump(d, open(p, \'w\'), indent=2)" '
                   f'"{settings}" {args.engine}\n')
         say(f"Play plays Project+ with {'EmissaryRecomp ' + tag if args.engine == 'emissary' else 'Dolphin'}")
+    account = run_account(args, "mac")
+    login = account_login(cfg, account) if account else None
+    signin = ""
+    if login:
+        # As win_run, with the Mac's python3 (the script goes as base64: no quoting through two shells).
+        script = base64.b64encode(LOGIN_SCRIPT.encode()).decode()
+        signin = f'echo {script} | base64 -D | /usr/bin/python3 - "{profile}" {login_payload(login)}\n'
+        say(f"logged in to {account} ({login['email']})")
     mac(cfg, f'[ -d "{MAC_APP}" ] || {{ echo "no macOS staging build yet: mac build" >&2; exit 1; }}; '
-             f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n{controls}{engine}'
+             f'mkdir -p "{profile}"; {mac_seed_pplus(rel, profile) if rel else ""}\n{controls}{engine}{signin}'
              f'open -n {envs} --env "PPO_USER_DATA_DIR={profile}" "{MAC_APP}"')
     say(f"started the macOS client on {cfg['mac_host']}, profile ~/{MAC_DIR}/profiles/{args.profile}")
 
@@ -1622,6 +1785,9 @@ def main() -> None:
         p = cs.add_parser("run", help="start the client against the staging server")
         p.add_argument("--fresh", action="store_true", help="delete the profile first (a fresh install)")
         p.add_argument("--profile", default="a", help="profile name (a second account: --profile b)")
+        p.add_argument("--account", help="the staging account it starts logged in to (" + ", ".join(STAGING_ACCOUNTS[:4])
+                       + ", ...; none: the profile's own login). Default: the profile's (Windows a Red, b Blue, "
+                         "Mac a Yellow, b Green), none with --fresh")
         p.add_argument("--controls", choices=sorted(CONTROLS),
                        help="port 1: the GameCube adapter (EmissaryRecomp: a controller) or the keyboard")
         p.add_argument("--engine", choices=["dolphin", "emissary"],

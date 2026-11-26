@@ -1,5 +1,6 @@
 import { appVersion } from "@common/constants";
 import { PRODUCT_SLUG } from "@common/product";
+import { readTestMode } from "@common/test_mode";
 import { app, safeStorage } from "electron";
 import electronLog from "electron-log";
 
@@ -60,7 +61,15 @@ export default function setupAccountsIpc() {
   const urls = resolveServiceUrls();
   log.info(`Accounts API: ${urls.accountsApi}`);
   const client = new AccountsHttpClient(urls.accountsApi, `${PRODUCT_SLUG}-launcher/${appVersion}`);
-  const sessions = new SessionStore(SessionStore.defaultPath(app.getPath("userData")), safeStorage);
+  // macOS test mode runs on Chromium's mock keychain (main.ts), whose key is not the same from one
+  // start to the next: every token it encrypted failed to decrypt at the next start, so a staging
+  // Mac client was logged out each time. There the tokens are kept as they are (`plain:`), as on a
+  // system without encryption.
+  const mockKeychain = readTestMode(process.env, app.isPackaged).active && process.platform === "darwin";
+  const sessions = new SessionStore(
+    SessionStore.defaultPath(app.getPath("userData")),
+    mockKeychain ? null : safeStorage,
+  );
   sessions.loadSync();
   const manager = new AccountsManager(client, sessions);
 

@@ -53,6 +53,31 @@ real install. Releases never contain that file.
 
 A second account on the same machine: `win run --profile b` (or `mac run --profile b`).
 
+## Accounts
+
+Each `run` starts the client logged in to a staging account of its own, so the board's runs (each
+on the next free profile) and its 2v2 are always different players:
+
+| Profile | Windows | Mac |
+|---|---|---|
+| a | Red | Yellow |
+| b | Blue | Green |
+| c, d, e, f, g, h | Orange, Pink, Lime, Gold, Brown, Black | Cyan, Purple, Teal, Silver, White, Gray |
+
+The account is `staging-<name>@staging.test`, password `staging-pass`, made in the staging database
+the first time it is used: email verified, rules accepted, a connect code (`RED#1`, ...). Before the
+client starts, `run` logs in to the accounts server and writes that session into the profile:
+Settings' `accounts` then list only that account, and `sessions.json` holds its token (`plain:`,
+which the launcher reads as well as its own keychain-encrypted ones). The rest of the profile is
+kept. If the server can't give a session, `run` says so and the client starts with the profile's
+own login.
+
+`--account <name>` picks another of the names, `--account none` keeps whatever the profile is
+logged in as (an account you made by hand). `--fresh` logs in to nothing unless `--account` is
+given, so its first start still signs up or logs in by hand. Fake players (`server seed-fake`)
+give these accounts friends and history only once they exist: run the seed again after their
+first use.
+
 `--controls pad|keyboard` on `win run` / `mac run` sets port 1 for that profile before it starts:
 `pad` is the GameCube adapter (`[Core] SIDevice0 = 12`), `keyboard` a standard controller
 (`SIDevice0 = 6`, which Dolphin sets up on the keyboard in `GCPadNew.ini`), the other ports empty.
@@ -126,7 +151,8 @@ commit, how far behind `main` it is, the recomp's core), whether the server is u
 Windows, Windows recomp (`emissary build`), Mac, Mac recomp (`emissary build --mac`), Build
 everything (Windows, its recomp, then the Mac) and Run 2v2. Each Run on a machine gets the other
 controls: the controller while no staging client running on that machine (any stage) has it, else
-the keyboard. Run 2v2 puts profile a on the controller and b on the keyboard on each machine. The
+the keyboard. Each Run is logged in to its profile's account ("Accounts" above), so Run 2v2 is
+Red, Blue, Yellow and Green. Run 2v2 puts profile a on the controller and b on the keyboard on each machine. The
 engine a client plays with is its profile's Settings > Game "Play Project+ with".
 
 ## Builds

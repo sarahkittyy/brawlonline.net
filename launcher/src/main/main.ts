@@ -168,8 +168,9 @@ const remoteDebuggingPort = testMode.remoteDebuggingPort ?? (isDevelopment ? 922
 if (remoteDebuggingPort !== null) {
   app.commandLine.appendSwitch("remote-debugging-port", String(remoteDebuggingPort));
 }
-// On macOS, test mode keeps its keys out of the keychain: safeStorage (sessions.json) and Chromium's
-// cookies use a fixed stand-in key. A staging build is signed ad hoc again each time, so the
+// On macOS, test mode keeps its keys out of the keychain: safeStorage and Chromium's cookies use a
+// stand-in key, which is not the same from one start to the next (so sessions.json isn't
+// encrypted there: accounts/setup.ts). A staging build is signed ad hoc again each time, so the
 // keychain sees a new app and asked for the password at every run to read "Brawl Online Safe
 // Storage" (the real install's item, which a test profile shouldn't touch anyway).
 if (testMode.active && process.platform === "darwin") {
