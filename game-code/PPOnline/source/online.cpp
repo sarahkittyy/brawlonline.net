@@ -10,6 +10,8 @@
 //                          replace -> a port outside 0-7 does nothing (it overwrote the pad thread)
 //   PADControlMotor        0x802162A4  replace  -> online match: only this player's port rumbles,
 //                          on the controller they locked in with
+//   ResFont code map lookup 0x8015E410 replace -> a character the font lacks is drawn as a
+//                          fullwidth form or a lookalike it has (Text::fallbackChar)
 #include <gf/gf_scene.h>
 #include <memory.h>
 #include <mu/mu_msg.h>
@@ -26,6 +28,8 @@
 #include "stage_legal.h"
 
 namespace Rpc { void tick(); }
+
+namespace Text { void installFontFallback(CoreApi* api); }
 
 namespace Online {
 
@@ -250,6 +254,7 @@ namespace Online {
         AnyoneMenu::install(api);
         BootMenu::install(api);
         LocalAspect::install(api);
+        Text::installFontFallback(api);
     }
 }
 
@@ -320,5 +325,68 @@ namespace Text {
         if (group) s_buf[n++] = 0x13;
         s_buf[n] = 0;
         msg->printf(window, "%s", s_buf);
+    }
+
+    // A character a font has no glyph for came out as the font's "unknown" glyph: in font_hira,
+    // the heavy face of the character select's name plates and of most menus, a solid white cell
+    // (Sarah's board: "underscores in usernames show up in-game as big white rectangles"). An
+    // account name may have any ASCII but \ and ` (server/crates/common codes.rs is_name_char),
+    // and font_hira has no # $ ( ) * < > [ ] ^ _ { | }. It has the fullwidth forms of
+    // # $ ( ) ^ _ (＿ is a full-cell underscore), so those are drawn instead; the rest get a
+    // lookalike it has. A fullwidth character a font lacks falls back to its ASCII form. The k-th
+    // replacement for `c` (k = 0, 1), or 0 when there is none.
+    u16 fallbackChar(u16 c, int k)
+    {
+        if (c >= 0x21 && c <= 0x7E) {
+            if (k == 0) return (u16)(c + 0xFEE0);   // ！ .. ～
+            switch (c) {
+                case '*': return 0x00D7;                 // ×
+                case '[': case '{': return 0xFF08;       // （
+                case ']': case '}': return 0xFF09;       // ）
+                case '<': return 0x2190;                 // ←
+                case '>': return 0x2192;                 // →
+                case '|': return 'l';
+                case '`': return 0x2032;                 // ′
+                default: return 0;
+            }
+        }
+        if (k == 0 && c >= 0xFF01 && c <= 0xFF5E) return (u16)(c - 0xFEE0);
+        if (k == 0 && c == 0x3000) return ' ';   // the ideographic space
+        return 0;
+    }
+
+    // nw4r::ut::ResFontBase's code map lookup (0x8015E410: font, map, character -> glyph index or
+    // 0xFFFF), which Brawl's GetGlyph, GetCharWidth and GetCharWidths call for the first map whose
+    // range has the character, and whose 0xFFFF they turn into the font's alterCharIndex (all
+    // three cache the result per font, at +0x18/+0x1A, for the character asked). On a 0xFFFF the
+    // replacements are looked up the same way, in the same font; only text drawing reads this.
+    typedef u16 (*FindGlyphFn)(void* font, const u8* map, u16 c);
+    static FindGlyphFn s_origFindGlyph = NULL;
+
+    static u16 findInFont(void* font, u16 c)
+    {
+        const u32 info = *(u32*)((u8*)font + 0x14);   // FontInformation
+        if (!Online::isPtr(info)) return 0xFFFF;
+        u32 m = *(u32*)(info + 0x10);                 // its first FontCodeMap (+8 the next)
+        for (int guard = 0; Online::isPtr(m) && guard < 64; guard++, m = *(u32*)(m + 8)) {
+            const u8* map = (const u8*)m;
+            if (c >= *(const u16*)map && c <= *(const u16*)(map + 2)) return s_origFindGlyph(font, map, c);
+        }
+        return 0xFFFF;
+    }
+
+    static u16 hkFindGlyph(void* font, const u8* map, u16 c)
+    {
+        u16 g = s_origFindGlyph(font, map, c);
+        for (int k = 0; g == 0xFFFF && k < 2; k++) {
+            const u16 f = fallbackChar(c, k);
+            if (f) g = findInFont(font, f);
+        }
+        return g;
+    }
+
+    void installFontFallback(CoreApi* api)
+    {
+        api->syReplaceFunc(0x8015E410, reinterpret_cast<void*>(hkFindGlyph), (void**)&s_origFindGlyph);
     }
 }

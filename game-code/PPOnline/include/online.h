@@ -29,4 +29,7 @@ namespace Text {
     const char* overrideFor(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
     // Print `text` into a message window keeping the original line's style tags.
     void printStyled(MuMsg* msg, u32 window, const void* msbin, u32 line, const char* text);
+    // The k-th (0, 1) character to draw for `c` when a font has no glyph for it (an ASCII
+    // character's fullwidth form, then a lookalike; a fullwidth one's ASCII), or 0 (online.cpp).
+    u16 fallbackChar(u16 c, int k);
 }

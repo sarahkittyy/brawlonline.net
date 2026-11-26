@@ -22,6 +22,7 @@
 #include <memory.h>
 #include <string.h>
 #include "labels.h"
+#include "online.h"
 #include "ppom.h"
 
 namespace Labels {
@@ -82,7 +83,8 @@ namespace Labels {
         return false;
     }
 
-    static int glyphIndex(u16 code)
+    // The glyph for `code` in the font's code maps, or 0xFFFF (a table map's 0xFFFF: none).
+    static int findGlyph(u16 code)
     {
         u32 p = s_font.cmap;
         for (int guard = 0; isPtr(p) && guard < 64; guard++) {
@@ -90,7 +92,7 @@ namespace Labels {
             u16 lo = *(u16*)b, hi = *(u16*)(b + 2), method = *(u16*)(b + 4);
             if (code >= lo && code <= hi) {
                 if (method == 0) return *(u16*)(b + 0xC) + (code - lo);
-                if (method == 1) return *(u16*)(b + 0xC + 2 * (code - lo));
+                if (method == 1 && *(u16*)(b + 0xC + 2 * (code - lo)) != 0xFFFF) return *(u16*)(b + 0xC + 2 * (code - lo));
                 if (method == 2) {
                     u16 n = *(u16*)(b + 0xC);
                     u16* t = (u16*)(b + 0xE);
@@ -101,7 +103,19 @@ namespace Labels {
             }
             p = *(u32*)(b + 8);
         }
-        return s_font.alt;
+        return 0xFFFF;
+    }
+
+    // A character the font lacks (font_hira has no _ # $ ( ) ...) as the game now draws it
+    // (Text::fallbackChar, online.cpp), else the font's glyph for unknown characters (a white cell).
+    static int glyphIndex(u16 code)
+    {
+        int g = findGlyph(code);
+        for (int k = 0; g == 0xFFFF && k < 2; k++) {
+            const u16 f = Text::fallbackChar(code, k);
+            if (f) g = findGlyph(f);
+        }
+        return g == 0xFFFF ? s_font.alt : g;
     }
 
     struct Width {
