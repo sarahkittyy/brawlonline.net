@@ -19,6 +19,7 @@ import { getAppBootstrap } from "./bootstrap";
 import type { BrowserWindowManager } from "./browser_window_manager";
 import { checkIso, isoGameDataReader } from "./check_iso";
 import type { ConfigFlags } from "./flags/flags";
+import { driverEventsText } from "./gpu_driver_events";
 import {
   ipc_checkForUpdate,
   ipc_checkValidIso,
@@ -242,6 +243,10 @@ async function logFiles(
     { name: "system.txt", source: { text: await systemInfo(dolphinManager, settingsManager, flags) } },
     ...(await folderFiles(logsFolder, "launcher")),
   ];
+  // Whether the graphics driver reset (bug report #364: EmissaryRecomp closed on a lost Vulkan device).
+  if (process.platform === "win32") {
+    files.push({ name: "gpu-driver-events.txt", source: { text: await driverEventsText() } });
+  }
   for (const [launchType, zipFolder] of [
     [DolphinLaunchType.NETPLAY, "netplay-dolphin"],
     [DolphinLaunchType.PLAYBACK, "playback-dolphin"],
