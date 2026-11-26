@@ -43,11 +43,17 @@ Exactly when:
 
 The page cleans the server's HTML once more (`changelog_html.ts`): only the elements and attributes the blog's renderer writes, pictures and videos only from the accounts server, links absolute and opened outside.
 
+## Discord (#updates)
+
+Sarah's board, 2026-11-26: "i want to have the brawlonline bot upload my patch notes to #updates on discord automatically, so i don't have to write them twice ... we would have to strip all the icons, definitely remove a lot of whitespace, and maybe put all the images attached at the bottom."
+
+The Discord bot (`D:/code/rust/brawlonline-bot`, its README "patch notes") posts each changelog in #updates once the launcher release that shows it is out: every 2 minutes it reads the release feed's `releaseDate` (`/updates/launcher/latest.yml`) and the feed's changelogs published before it (`GET /v1/changelogs?before=`, the launcher's own rule), and posts the ones it hasn't. It uses the `markdown` of each: the pictures alone in a paragraph attached under the text, the icons in lines of text dropped, blank lines only before headings, `@Name` as a mention of the member of that name. Nothing changes in the board: publishing then pushing as above is all it takes. `/patchnotes preview|post [id]` (Discord admins) show or post one by hand.
+
 ## Server
 
 - `changelogs` (migration 0046): `body_md`, `published_at`, `every_start`. Every changelog stays as the history (`pp-admin changelog list`).
-- `GET /v1/changelogs?limit=&before=&after=` (public, `max-age=60`): the feed, `{changelogs: [{id, html, publishedAt, everyStart}], next}`, newest first, rendered by `blog::render`, `limit` 2 by default and at most 5. `before` (RFC 3339, a launcher's build time) leaves out the ones published after it; `next` is the opaque cursor for `after` (published time and id), null on the last page. The first page (no `after`) starts with the every-start one if there is one, whatever `before` says. 400 `bad_cursor` / `bad_before`.
-- `GET /v1/changelogs/latest` (public, `max-age=60`): `{changelog: {id, html, publishedAt, everyStart} | null}`, the every-start one if there is one, else the newest. The launchers before the feed ask this; kept for them.
+- `GET /v1/changelogs?limit=&before=&after=` (public, `max-age=60`): the feed, `{changelogs: [{id, html, markdown, publishedAt, everyStart}], next}`, newest first, rendered by `blog::render`, `limit` 2 by default and at most 5. `before` (RFC 3339, a launcher's build time) leaves out the ones published after it; `next` is the opaque cursor for `after` (published time and id), null on the last page. The first page (no `after`) starts with the every-start one if there is one, whatever `before` says. 400 `bad_cursor` / `bad_before`.
+- `GET /v1/changelogs/latest` (public, `max-age=60`): `{changelog: {id, html, markdown, publishedAt, everyStart} | null}`, the every-start one if there is one, else the newest. The launchers before the feed ask this; kept for them.
 - `pp-admin changelog publish [--every-start] | clear-every-start | list | render` (`server/crates/admin/src/changelog.rs`, `accounts::changelog::publish`). `publish` refuses a picture that is neither sent nor already in the media folder, and anything that isn't a PNG, JPEG, GIF, WebP, AVIF, MP4, WebM or MOV (by its bytes). Audited as `changelog.publish` / `changelog.publish_every_start`.
 - Tests: `changelog::tests`, `e2e --test changelogs` (`changelogs_feed_pages`: pages, `before`, the every-start one, bad cursors); launcher `main/changelog_version.test.ts`, `lib/changelog/changelog_html.test.ts`.
 

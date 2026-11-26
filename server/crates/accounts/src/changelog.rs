@@ -194,6 +194,9 @@ pub struct LatestChangelog {
     pub id: i64,
     /// `blog::render`'s HTML. Its pictures and videos are on this server (`/blog/media/...`, relative).
     pub html: String,
+    /// The Markdown it was written in, for the Discord bot, which posts each release's to #updates
+    /// (Discord's Markdown, not HTML). Launchers ignore it.
+    pub markdown: String,
     /// A launcher shows only one published after the last it showed, and never one published
     /// after the launcher was built (it is about a release still to come).
     pub published_at: DateTime<Utc>,
@@ -217,12 +220,7 @@ pub async fn latest(State(state): State<AppState>) -> Response {
     .await;
     match row {
         Ok(row) => {
-            let changelog = row.map(|r| LatestChangelog {
-                id: r.id,
-                html: render(&r.body_md).html,
-                published_at: r.published_at,
-                every_start: r.every_start,
-            });
+            let changelog = row.map(shown);
             ([(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"))], Json(LatestResp { changelog }))
                 .into_response()
         }
@@ -268,6 +266,7 @@ fn shown(r: ChangelogRow) -> LatestChangelog {
     LatestChangelog {
         id: r.id,
         html: render(&r.body_md).html,
+        markdown: r.body_md,
         published_at: r.published_at,
         every_start: r.every_start,
     }

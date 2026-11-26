@@ -46,6 +46,8 @@ async fn changelogs_publish_and_latest() {
     assert!(html.contains("<h2 id=\"launcher-0-2-9\">Launcher 0.2.9</h2>"), "{html}");
     assert!(html.contains(&format!("<figure><img src=\"/blog/media/{name}\" alt=\"The new menu\"")), "{html}");
     assert!(html.contains("&lt;b&gt;raw&lt;/b&gt;") && !html.contains("<b>"), "raw HTML is text: {html}");
+    // The Markdown too, as stored (the picture under its stored name), for the Discord bot.
+    assert_eq!(c["markdown"].as_str(), Some(md.replace("0123456789abcdef0123.png", name).as_str()));
 
     // The same picture again: already there, nothing written; a newer changelog is the latest.
     let md2 = format!("# Launcher 0.3.0\n\n![](/blog/media/{name})");
@@ -114,6 +116,7 @@ async fn changelogs_feed_pages() {
     let (_, p1) = s.get("/v1/changelogs?limit=2", None).await;
     assert_eq!(ids(&p1), vec![id(4), id(3)], "{p1}");
     assert!(p1["changelogs"][0]["html"].as_str().unwrap().contains("Launcher 0.2.9"), "{p1}");
+    assert_eq!(p1["changelogs"][0]["markdown"], "# Launcher 0.2.9", "{p1}");
     let next = p1["next"].as_str().unwrap();
     let (_, p2) = s.get(&format!("/v1/changelogs?limit=2&after={next}"), None).await;
     assert_eq!(ids(&p2), vec![id(2), id(1)], "{p2}");
