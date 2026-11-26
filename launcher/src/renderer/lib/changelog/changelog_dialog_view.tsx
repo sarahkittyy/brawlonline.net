@@ -17,17 +17,21 @@ import { AddonsSettingsMessages } from "@/pages/settings/addons_settings/addons_
 import { bodyFont, titleFont } from "@/styles/with_font";
 
 import { ChangelogMessages as Messages } from "./changelog.messages";
+import { ChangelogBody } from "./changelog_body";
 import type { ChangelogEntry } from "./changelog_feed";
 
 export type ChangelogDialogViewProps = {
   open: boolean;
   /** Newest first. */
-  entries: readonly (Pick<ChangelogEntry, "id" | "html"> & Partial<Pick<ChangelogEntry, "emissaryVersion">>)[];
+  entries: readonly (Pick<ChangelogEntry, "id" | "html"> &
+    Partial<Pick<ChangelogEntry, "emissaryVersion" | "mentions">>)[];
   /** There are older ones still to ask for. */
   hasMore: boolean;
   onLoadMore: () => void;
   onClose: () => void;
 };
+
+const NO_MENTIONS = {};
 
 /** How far below the feed's end may be (px) before the next changelogs are asked for. */
 const LOAD_AHEAD = 300;
@@ -139,7 +143,7 @@ export const ChangelogDialogView = ({ open, entries, hasMore, onLoadMore, onClos
                 {`${AddonsSettingsMessages.playWithEmissaryOn()} ${e.emissaryVersion}`.trim()}
               </EmissaryTag>
             )}
-            <Body dangerouslySetInnerHTML={{ __html: e.html }} data-testid="changelog-body" />
+            <Body html={e.html} mentions={e.mentions ?? NO_MENTIONS} />
           </React.Fragment>
         ))}
       </DialogContent>
@@ -167,7 +171,7 @@ const Divider = styled.hr`
   border-top: 1px solid rgba(255, 255, 255, 0.15);
 `;
 
-const Body = styled.div`
+const Body = styled(ChangelogBody)`
   font-family: ${bodyFont};
   font-size: 15px;
   line-height: 1.55;

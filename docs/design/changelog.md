@@ -47,7 +47,33 @@ The page cleans the server's HTML once more (`changelog_html.ts`): only the elem
 
 Sarah's board, 2026-11-26: "i want to have the brawlonline bot upload my patch notes to #updates on discord automatically, so i don't have to write them twice ... we would have to strip all the icons, definitely remove a lot of whitespace, and maybe put all the images attached at the bottom."
 
-The Discord bot (`D:/code/rust/brawlonline-bot`, its README "patch notes") posts each changelog in #updates once the launcher release that shows it is out: every 2 minutes it reads the release feed's `releaseDate` (`/updates/launcher/latest.yml`) and the feed's changelogs published before it (`GET /v1/changelogs?before=`, the launcher's own rule), and posts the ones it hasn't. It uses the `markdown` of each: the pictures alone in a paragraph attached under the text, the icons in lines of text dropped, blank lines only before headings, `@Name` as a mention of the member of that name. Nothing changes in the board: publishing then pushing as above is all it takes. `/patchnotes preview|post [id]` (Discord admins) show or post one by hand.
+The Discord bot (`D:/code/rust/brawlonline-bot`, its README "patch notes") posts each changelog in #updates once the launcher release that shows it is out: every 2 minutes it reads the release feed's `releaseDate` (`/updates/launcher/latest.yml`) and the feed's changelogs published before it (`GET /v1/changelogs?before=`, the launcher's own rule), and posts the ones it hasn't. It uses the `markdown` of each: the pictures alone in a paragraph attached under the text, the icons in lines of text dropped, blank lines only before headings, the board's mentions (below) as pings of their Discord accounts, `@Name` as a mention of the member of that name. Nothing changes in the board: publishing then pushing as above is all it takes. `/patchnotes preview|post [id]` (Discord admins) show or post one by hand.
+
+## Mentions
+
+Sarah's board, 2026-11-26: "i would love if @ on the kanban board let me search through users on both platforms. A custom kanban-only sort of token / syntax where I can specify a user as either discord, brawl online, or both ... in the launcher patch notes, the users would have their icons and badges and main and you could click on them to see their profile, hover to see their mini profile, and right click them. and when the same patch notes went out to discord, it would mention all the usernames that have discord attached. names that have no discord, mentioned on discord, show as just @their_brawl_online_username, plaintext. names that have no known brawlonline account, on brawlonline's patch notes, just show @plain_discord_username."
+
+**The token.** A mention is written in the Markdown as
+
+```text
+@{sarahkitty bo:SARA#694 dc:123456789012345678}   both
+@{sarahkitty bo:SARA#694}                         Brawl Online only
+@{milla dc:61305312321208320}                     Discord only
+```
+
+`bo:` is a connect code, `dc:` a Discord user id (17 to 20 digits), each at most once, at least one of them, after the label. The label is what shows where nothing better is known: the Brawl Online name, or for a Discord-only one the Discord username. Anything else in braces is text. It is nothing in Markdown, so every reader handles it before the Markdown: accounts (`accounts/src/mentions.rs`), the bot (`parse_token` in its `patchnotes.rs`) and the board (`atParse`) read it the same way. Written by hand it works the same; the autocomplete just writes it for you.
+
+**Writing them (the board).** In the Patch notes editor, `@` and two letters opens a list under the `@`: Brawl Online accounts by name or code (`SARA`, `sara#6`) and members of the brawlonline.net Discord server by username, display name or server nickname, at most 10, the closest first (a whole name or code, then the start of one, the start of a word, anywhere in it). The board keeps both lists and searches them itself, so typing costs nothing: prod's accounts (`ssh … sudo pp-admin user directory`, before that pp-admin is deployed `pp-admin user list`) and the server's members (`lib/discord_members.py`, run on the bot's VPS with the bot's token, which stays there), read again when 10 minutes old and kept in `data/mentions.json`. Both are reads.
+
+- One person on both sides is one row: a Brawl Online account whose profile's Discord username is a member's (`link: profile`), or an account and a member with the very same name (`same name?` beside it: nobody linked them, Sarah judges). Such a row has **Both | Brawl Online | Discord** (←/→), Both by default.
+- A row with one side has **+ Discord** / **+ Brawl Online** (→): it writes that mention followed by `@`, and what is typed after it lists only the other side's people; picking one makes the two one mention.
+- Enter or Tab writes the highlighted row, Esc closes the list (not the overlay). Up to two spaces in what is typed are allowed (`@The Doc`); a typed text with a space that names nobody closes the list, as it's just prose.
+
+**The preview** shows a Brawl Online mention as the account's name now, bold (wavy underline: no such account on prod), with a blue dot after it when it pings someone on Discord; a Discord-only one is plain text with a dotted underline. Hovering one says who it is on each side and what each place shows.
+
+**Launchers.** The feed (`/v1/changelogs`, `/latest`) renders each mention as `<span class="mention" data-uid data-code data-discord>@name</span>`: `data-uid` and the player's name now (the label is only for a code nobody has, or a banned player) for a Brawl Online one, and lists those players in the changelog's `mentions` (uid, name, code and their name tag: the flag and main they show, the main icon and badges an admin gave). The popup puts the launcher's own name in each such span (`changelog_body.tsx`): main icon, flag, badges (those for the profile) and the bold name, which opens their profile, shows the hover card and has the right-click menu, as names do everywhere. A Discord-only one, or a code nobody has, stays plain `@label`. A launcher from before this sees the span's text, `@name`. In code (`` `...` ``) a token stays as written.
+
+**Discord.** The bot pings the Discord account of each mention (`<@id>`, when that member is on the server); one without a Discord account, or whose member left, is plain `@label`, never guessed at as a member's name. `@Name` written by hand still pings as before. `/patchnotes preview` lists every mention and what it became.
 
 ## EmissaryRecomp
 
@@ -63,8 +89,9 @@ Sarah's board, 2026-11-26: "it's probably right that we have recomp patch notes 
 - `emissary=1` on `GET /v1/changelogs`: EmissaryRecomp's too, with `product` and `version` (`before` doesn't apply to them), and their every-start one on the first page. Without it, and in `/latest`, only the launcher's (older launchers never see them). `pp-admin changelog publish --emissary v0.7.2` publishes one; its every-start one is replaced per product.
 - `GET /v1/changelogs?limit=&before=&after=` (public, `max-age=60`): the feed, `{changelogs: [{id, html, markdown, publishedAt, everyStart}], next}`, newest first, rendered by `blog::render`, `limit` 2 by default and at most 5. `before` (RFC 3339, a launcher's build time) leaves out the ones published after it; `next` is the opaque cursor for `after` (published time and id), null on the last page. The first page (no `after`) starts with the every-start one if there is one, whatever `before` says. 400 `bad_cursor` / `bad_before`.
 - `GET /v1/changelogs/latest` (public, `max-age=60`): `{changelog: {id, html, markdown, publishedAt, everyStart} | null}`, the every-start one if there is one, else the newest. The launchers before the feed ask this; kept for them.
+- `pp-admin user directory`: every account with a code and not banned, a JSON line each (uid, code, name, the Discord username on its profile), for the board's `@` list.
 - `pp-admin changelog publish [--every-start] | clear-every-start | list | render` (`server/crates/admin/src/changelog.rs`, `accounts::changelog::publish`). `publish` refuses a picture that is neither sent nor already in the media folder, and anything that isn't a PNG, JPEG, GIF, WebP, AVIF, MP4, WebM or MOV (by its bytes). Audited as `changelog.publish` / `changelog.publish_every_start`.
-- Tests: `changelog::tests`, `e2e --test changelogs` (`changelogs_feed_pages`: pages, `before`, the every-start one, bad cursors); launcher `main/changelog_version.test.ts`, `lib/changelog/changelog_html.test.ts`.
+- Tests: `changelog::tests`, `mentions::tests`, `e2e --test changelogs` (`changelog_mentions`) (`changelogs_feed_pages`: pages, `before`, the every-start one, bad cursors); launcher `main/changelog_version.test.ts`, `lib/changelog/changelog_html.test.ts`.
 
 ## The first push
 

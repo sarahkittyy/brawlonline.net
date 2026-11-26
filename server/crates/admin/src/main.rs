@@ -270,6 +270,10 @@ enum BugCmd {
 #[derive(Subcommand)]
 enum UserCmd {
     List,
+    /// Every account with a connect code and not banned, one JSON object a line: uid, code, name
+    /// and the Discord username on its profile (or null). The agent board's `@` autocomplete for
+    /// patch notes reads it (docs/design/changelog.md, "Mentions").
+    Directory,
     Show {
         ident: String,
     },
@@ -875,6 +879,19 @@ async fn main() -> anyhow::Result<()> {
                     if u.is_banned() { "yes" } else { "" },
                     if u.chat_muted_at.is_some() { "yes" } else { "" }
                 );
+            }
+        }
+        Cmd::User(UserCmd::Directory) => {
+            let rows: Vec<(uuid::Uuid, String, String, Option<String>)> = sqlx::query_as(
+                "SELECT u.uid, u.connect_code, u.display_name, NULLIF(p.discord, '')
+                   FROM users u LEFT JOIN profiles p ON p.uid = u.uid
+                  WHERE u.connect_code IS NOT NULL AND (u.banned_until IS NULL OR u.banned_until <= now())
+                  ORDER BY u.created_at",
+            )
+            .fetch_all(&pool)
+            .await?;
+            for (uid, code, name, discord) in rows {
+                println!("{}", serde_json::json!({ "uid": uid, "code": code, "name": name, "discord": discord }));
             }
         }
         Cmd::User(UserCmd::Show { ident }) => {

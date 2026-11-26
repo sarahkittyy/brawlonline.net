@@ -1,0 +1,24 @@
+/* A player a changelog mentions (changelog_body.tsx): main, flag, badges and name, in the line of text. */
+.mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  vertical-align: bottom;
+  font-weight: 700;
+}
+
+.main {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* The popup's text rounds and lines up its pictures; a name's icons keep their own look. */
+.mention img {
+  border-radius: 0;
+  vertical-align: baseline;
+}
+
+.name {
+  font-weight: 700;
+}

@@ -523,7 +523,15 @@ export type LatestChangelog = {
   product?: "launcher" | "emissary";
   /** An EmissaryRecomp one's release (`v0.7.2`). */
   version?: string;
+  /**
+   * The Brawl Online players it mentions (the agent board's `@`), as their names show: each goes in place of its
+   * `<span class="mention" data-uid>` in `html`. Absent from an older server, and when it mentions nobody.
+   */
+  mentions?: ChangelogMention[];
 };
+
+/** A player a changelog mentions. */
+export type ChangelogMention = NameTag & { uid: string; displayName: string; connectCode: string };
 
 /** A page of the changelog feed (`GET /v1/changelogs`): newest first; `next` is the `after` of the page after. */
 export type ChangelogPage = { changelogs: LatestChangelog[]; next: string | null };

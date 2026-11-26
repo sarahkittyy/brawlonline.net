@@ -67,7 +67,8 @@ fn read_stdin() -> anyhow::Result<String> {
 
 /// `render` needs no database: done before main connects.
 pub fn render() -> anyhow::Result<()> {
-    print!("{}", accounts::blog::render(&read_stdin()?).html);
+    // No database here: a mention shows its label (the board puts its own names there).
+    print!("{}", accounts::mentions::render(&read_stdin()?, &Default::default()));
     Ok(())
 }
 

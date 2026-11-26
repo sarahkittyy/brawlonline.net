@@ -15,6 +15,7 @@
 //! the board publishes them once that release is live, and only launchers that play with it ask for
 //! them (`?emissary=1`), in the same feed.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use axum::extract::{Query, State};
@@ -26,9 +27,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
-use crate::blog::{render, sniff_media, valid_media_name};
+use crate::blog::{sniff_media, valid_media_name};
 use crate::cursor;
 use crate::error::{ApiError, ApiResult};
+use crate::mentions::{self, MentionedPlayer};
 use crate::AppState;
 
 /// The longest changelog's Markdown.
@@ -248,6 +250,10 @@ pub struct LatestChangelog {
     /// An Emissary one's release (`v0.7.2`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The Brawl Online players it mentions (`mentions`), as their names show: the launcher puts
+    /// each in place of its `<span class="mention" data-uid>` in `html`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<MentionedPlayer>,
 }
 
 fn launcher_product() -> String {
@@ -271,7 +277,8 @@ pub async fn latest(State(state): State<AppState>) -> Response {
     .await;
     match row {
         Ok(row) => {
-            let changelog = row.map(shown);
+            let players = mentioned(&state.pool, row.as_slice()).await;
+            let changelog = row.map(|r| shown(r, &players));
             ([(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"))], Json(LatestResp { changelog }))
                 .into_response()
         }
@@ -316,10 +323,36 @@ fn parse_page_cursor(c: &str) -> Option<(DateTime<Utc>, i64)> {
     Some((DateTime::from_timestamp_micros(f[0].parse().ok()?)?, f[1].parse().ok()?))
 }
 
-fn shown(r: ChangelogRow) -> LatestChangelog {
+/// The players these changelogs mention, by code. A failed lookup is logged, and the mentions
+/// show as their labels: the patch notes still show.
+async fn mentioned(pool: &PgPool, rows: &[ChangelogRow]) -> HashMap<String, MentionedPlayer> {
+    let mut codes: Vec<String> = Vec::new();
+    for r in rows {
+        for c in mentions::codes(&r.body_md) {
+            if !codes.contains(&c) {
+                codes.push(c);
+            }
+        }
+    }
+    mentions::players(pool, &codes).await.unwrap_or_else(|e| {
+        tracing::error!("changelog mentions: {e}");
+        HashMap::new()
+    })
+}
+
+fn shown(r: ChangelogRow, players: &HashMap<String, MentionedPlayer>) -> LatestChangelog {
+    let mut mentioned: Vec<MentionedPlayer> = Vec::new();
+    for c in mentions::codes(&r.body_md) {
+        if let Some(p) = players.get(&c) {
+            if !mentioned.iter().any(|m| m.uid == p.uid) {
+                mentioned.push(p.clone());
+            }
+        }
+    }
     LatestChangelog {
         id: r.id,
-        html: render(&r.body_md).html,
+        html: mentions::render(&r.body_md, players),
+        mentions: mentioned,
         markdown: r.body_md,
         published_at: r.published_at,
         every_start: r.every_start,
@@ -397,9 +430,10 @@ pub async fn page(State(state): State<AppState>, Query(q): Query<PageQuery>) -> 
         .fetch_all(&state.pool)
         .await
         .map_err(ApiError::internal)?;
-        changelogs.extend(every.into_iter().map(shown));
+        every.into_iter().rev().for_each(|r| rows.insert(0, r));
     }
-    changelogs.extend(rows.into_iter().map(shown));
+    let players = mentioned(&state.pool, &rows).await;
+    changelogs.extend(rows.into_iter().map(|r| shown(r, &players)));
     Ok((
         [(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"))],
         Json(ChangelogPage { changelogs, next }),

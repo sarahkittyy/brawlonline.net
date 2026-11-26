@@ -202,3 +202,51 @@ async fn emissary_changelogs_are_asked_for() {
 
     let _ = std::fs::remove_dir_all(&media_dir);
 }
+
+/// The agent board's `@` mentions (`@{label bo:CODE dc:<id>}`, docs/design/changelog.md "Mentions"):
+/// the feed's HTML marks each with a span, a Brawl Online one carrying the player's uid and their
+/// name now (whatever the label says), and `mentions` lists those players with their name tags.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changelog_mentions() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let media_dir = std::env::temp_dir().join(format!("pp-e2e-changelog-mentions-{}", std::process::id()));
+    let (_, a) = s.create_player("mention-a@example.test", "Thanked", "THNK").await;
+    let (icon, _) = accounts::icons::add_icon(&s.pool, "star", PNG, "test").await.unwrap();
+    let ua = uuid::Uuid::parse_str(&a.uid).unwrap();
+    accounts::icons::set_badge(&s.pool, ua, &icon, Some("Star"), None, None).await.unwrap();
+
+    let md = format!(
+        "# Launcher 0.2.11\n\n- ty @{{old label bo:{} dc:123456789012345678}}, @{{milla dc:61305312321208320}} \
+         and @{{nobody bo:GONE#1}}\n\n`@{{x bo:{}}}`",
+        a.connect_code.to_lowercase(),
+        a.connect_code
+    );
+    changelog::publish(&s.pool, &media_dir, &md, &[], false).await.unwrap();
+    let (st, page) = s.get("/v1/changelogs", None).await;
+    assert_eq!(st, 200, "{page}");
+    let c = &page["changelogs"][0];
+    let html = c["html"].as_str().unwrap();
+    assert!(
+        html.contains(&format!(
+            "<span class=\"mention\" data-uid=\"{}\" data-code=\"{}\" data-discord=\"123456789012345678\">@Thanked</span>",
+            a.uid, a.connect_code
+        )),
+        "{html}"
+    );
+    assert!(html.contains("<span class=\"mention\" data-discord=\"61305312321208320\">@milla</span>"), "{html}");
+    assert!(html.contains("<span class=\"mention\" data-code=\"GONE#1\">@nobody</span>"), "{html}");
+    assert!(html.contains(&format!("<code>@{{x bo:{}}}</code>", a.connect_code)), "{html}");
+    // The Markdown as written, for the Discord bot.
+    assert_eq!(c["markdown"], md.as_str());
+    let m = c["mentions"].as_array().unwrap();
+    assert_eq!(m.len(), 1, "{page}");
+    assert_eq!(m[0]["uid"], a.uid.as_str());
+    assert_eq!(m[0]["displayName"], "Thanked");
+    assert_eq!(m[0]["connectCode"], a.connect_code.as_str());
+    assert_eq!(m[0]["badges"][0]["icon"], icon.as_str());
+    // The newest alone (older launchers) has them too.
+    let (_, latest) = s.get("/v1/changelogs/latest", None).await;
+    assert_eq!(latest["changelog"]["mentions"][0]["uid"], a.uid.as_str(), "{latest}");
+
+    let _ = std::fs::remove_dir_all(&media_dir);
+}

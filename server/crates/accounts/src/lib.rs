@@ -17,6 +17,7 @@ pub mod launcher;
 pub mod leaderboard;
 pub mod live;
 pub mod mail;
+pub mod mentions;
 pub mod pages;
 pub mod password;
 pub mod profile;

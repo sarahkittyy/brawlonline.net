@@ -48,6 +48,8 @@ const DROP = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "TEMPLATE"
 
 const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
+const UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function resolve(url: string, base: URL): URL | null {
   try {
     return new URL(url, base);
@@ -119,6 +121,15 @@ function clean(node: Node, doc: Document, base: URL): Node[] {
         out.setAttribute("checked", "");
       }
       return [out];
+    }
+    case "SPAN": {
+      // A player the agent board's @ mentions (accounts' mentions.rs): the popup puts their name here
+      // (changelog_dialog_view.tsx), the text stays for one it doesn't know.
+      const uid = el.getAttribute("data-uid") ?? "";
+      if (el.classList.contains("mention") && UID.test(uid)) {
+        out.setAttribute("data-mention", uid);
+      }
+      break;
     }
     case "TH":
     case "TD": {

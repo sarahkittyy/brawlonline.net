@@ -17,6 +17,21 @@ describe("changelogHtml", () => {
     );
   });
 
+  it("keeps a mention's player and drops everything else on a span", () => {
+    const uid = "24a184c8-608e-46b9-9e7b-d26d805c545c";
+    const out = changelogHtml(
+      `<p>ty <span class="mention" data-uid="${uid}" data-code="SARA#694" data-discord="1">@sarahkitty</span> ` +
+        '<span class="mention" data-discord="61305312321208320">@milla</span> ' +
+        '<span class="mention" data-uid="nope" onclick="evil()">@x</span> <span data-uid="' +
+        uid +
+        '">@y</span></p>',
+      BASE,
+    );
+    expect(out).toBe(
+      `<p>ty <span data-mention="${uid}">@sarahkitty</span> <span>@milla</span> <span>@x</span> <span>@y</span></p>`,
+    );
+  });
+
   it("opens links in the browser and keeps only openable ones", () => {
     const out = changelogHtml(
       '<p><a href="https://example.com/x" onclick="evil()">site</a> <a href="/blog/post">post</a> ' +

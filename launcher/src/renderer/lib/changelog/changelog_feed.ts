@@ -1,6 +1,7 @@
 // The changelog popup's feed (docs/design/changelog.md): every published changelog, newest first,
 // asked for a page at a time (GET /v1/changelogs) as the popup scrolls down.
-import type { ChangelogPageQuery } from "@accounts/types";
+import type { ChangelogMention, ChangelogPageQuery } from "@accounts/types";
+import { isIconId, parseBadges } from "@common/badges";
 import log from "electron-log";
 import React from "react";
 
@@ -19,7 +20,38 @@ export type ChangelogEntry = {
   everyStart: boolean;
   /** EmissaryRecomp's patch notes for this release (`v0.7.2`); null for the launcher's. */
   emissaryVersion: string | null;
+  /** The players it mentions, by uid: their names go in its `[data-mention]` spans (changelogHtml). */
+  mentions: Record<string, ChangelogMention>;
 };
+
+const UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const text = (v: unknown, max: number): string | undefined =>
+  typeof v === "string" && v !== "" ? v.slice(0, max) : undefined;
+
+/** The mentioned players as the server sends them, checked: bad entries are dropped. */
+export function parseMentions(v: unknown): Record<string, ChangelogMention> {
+  const out: Record<string, ChangelogMention> = {};
+  if (!Array.isArray(v)) {
+    return out;
+  }
+  for (const m of v.slice(0, 200)) {
+    const displayName = text(m?.displayName, 64);
+    if (typeof m?.uid !== "string" || !UID.test(m.uid) || !displayName) {
+      continue;
+    }
+    out[m.uid] = {
+      uid: m.uid,
+      displayName,
+      connectCode: text(m.connectCode, 16) ?? "",
+      country: text(m.country, 16) ?? null,
+      main: text(m.main, 32) ?? null,
+      mainIcon: isIconId(m.mainIcon) ? m.mainIcon : null,
+      mainIconLabel: isIconId(m.mainIcon) ? text(m.mainIconLabel, 60) ?? null : null,
+      badges: parseBadges(m.badges),
+    };
+  }
+  return out;
+}
 
 /** `emissary`: the feed has EmissaryRecomp's patch notes too (its next pages are asked for with them). */
 export type FeedPage = { entries: ChangelogEntry[]; next: string | null; emissary: boolean };
@@ -44,6 +76,7 @@ export async function fetchFeedPage(
       publishedAt: c.publishedAt,
       everyStart: c.everyStart === true,
       emissaryVersion: c.product === "emissary" ? c.version ?? "" : null,
+      mentions: parseMentions(c.mentions),
     })),
     next: page.next,
     emissary,
