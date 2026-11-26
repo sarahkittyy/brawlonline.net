@@ -44,6 +44,8 @@ export const DOWNLOAD_RETRY_DELAYS_MS = [5 * 1000, 30 * 1000, 2 * 60 * 1000];
  * (bug report #280: five failed updates in a row, cause unknown).
  */
 export const INSTALLER_LOG_FILE = `${PRODUCT_NAME} update.log`;
+/** The folder of the running launcher, for the Windows installer of its update (installer.nsh UPDATE_DIR_ENV). */
+export const UPDATE_DIR_ENV = "BRAWL_ONLINE_UPDATE_DIR";
 /** At most this much of its end goes into main.log (a launcher that would not close logs about 4000: #357). */
 const INSTALLER_LOG_MAX_CHARS = 8000;
 
@@ -128,6 +130,14 @@ export class AppUpdater {
     // a feed with PPO_UPDATES_URL checks it, so the update bar and the launch gate can be tried.
     if (!app.isPackaged && process.env.PPO_UPDATES_URL) {
       autoUpdater.forceDevUpdateConfig = true;
+    }
+
+    // The Windows installer updates the folder the registry names (where the launcher was installed),
+    // so a launcher folder the player copied or moved somewhere else ran its update into the old
+    // folder and came back from there every time (bug report #359). The installer it starts inherits
+    // this, and updates the folder of the launcher that runs instead (installer.nsh UPDATE_DIR_ENV).
+    if (process.platform === "win32" && app.isPackaged) {
+      process.env[UPDATE_DIR_ENV] = path.dirname(process.execPath);
     }
 
     // An AppImage update replaces the file in place instead of saving it under the new version's name.

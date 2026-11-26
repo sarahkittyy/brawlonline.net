@@ -144,11 +144,86 @@ var StartMenuShortcutCheckbox
   ${EndIf}
 !macroend
 
+; The folder of the launcher that started the update (app_updater.ts UPDATE_DIR_ENV). electron-builder's
+; installer updates the folder the registry names, so a launcher folder the player copied or moved
+; to another drive ran each update into the old folder, which then opened instead: "When changing
+; folders the project is auto redownloading in the old folder" (bug report #359). An update started
+; from another folder than the installed one goes into that folder instead: the installed one is
+; removed as on any update (the player's files in it kept there, KEEP_DIR_SUFFIX), and the copy's
+; launcher files are replaced by the new version's (the player's files in it stay). Not for a launcher
+; installed for all users (its elevated installer does not see the variable), nor for a folder that is
+; a drive's root or holds no uninstaller (a copy of the files only, an unpacked build).
+!define UPDATE_DIR_ENV "BRAWL_ONLINE_UPDATE_DIR"
+
 !macro keepPlayerFilesFunctions
   ; The install folder the old version's uninstaller deletes, and the folder next to it that holds
   ; the player's files meanwhile; empty while nothing was moved.
   Var KeepFrom
   Var KeepDir
+  ; The installed folder, when the update goes into the running launcher's folder instead
+  ; (UPDATE_DIR_ENV); else empty.
+  Var MovedFrom
+
+  ; Sets $INSTDIR to the running launcher's folder (UPDATE_DIR_ENV) when that is another installed copy.
+  Function useRunningLauncherFolder
+    Push $R0
+    Push $R1
+    StrCpy $MovedFrom ""
+    ReadEnvStr $R0 ${UPDATE_DIR_ENV}
+    StrCpy $R1 $R0 1 -1
+    ${If} $R1 == "\"
+      StrCpy $R0 $R0 -1
+    ${EndIf}
+    StrCpy $R1 $R0 1 -1
+    ${If} $R0 == ""
+    ${OrIf} $R0 == $INSTDIR
+      ; The installed launcher (or one from before 0.2.12, which does not say).
+    ${ElseIf} $R1 == ":"
+      !insertmacro updateLog "the launcher runs from $R0, a drive's root: updating $INSTDIR"
+    ${ElseIf} $hasPerMachineInstallation == "1"
+      !insertmacro updateLog "the launcher runs from $R0, but is installed for all users: updating $INSTDIR"
+    ${ElseIfNot} ${FileExists} "$R0\${UNINSTALL_FILENAME}"
+      !insertmacro updateLog "the launcher runs from $R0, which has no uninstaller: updating $INSTDIR"
+    ${Else}
+      !insertmacro updateLog "the launcher runs from $R0, not from $INSTDIR: updating it there"
+      StrCpy $MovedFrom $INSTDIR
+      StrCpy $INSTDIR $R0
+    ${EndIf}
+    Pop $R1
+    Pop $R0
+  FunctionEnd
+
+  ; Deletes the launcher's own files (isLauncherEntry) from $INSTDIR, the running launcher's folder,
+  ; once the installed version is removed: the new version's files then go into it as into an empty
+  ; folder, so none of the copy's old files (a Dolphin file a later version dropped) stays.
+  Function clearCopiedLauncher
+    Push $R1
+    Push $R2
+    Push $R3
+    Push $R9
+    !insertmacro updateLog "replacing the launcher files in $INSTDIR (installed in $MovedFrom before)"
+    FindFirst $R1 $R2 "$INSTDIR\*.*"
+    ${DoWhile} $R2 != ""
+      ${If} $R2 != "."
+      ${AndIf} $R2 != ".."
+        !insertmacro isLauncherEntry $R2 $R3
+        ${If} $R3 == 1
+          ${If} ${FileExists} "$INSTDIR\$R2\*.*"
+            RMDir /r "$INSTDIR\$R2"
+          ${Else}
+            Delete "$INSTDIR\$R2"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      FindNext $R1 $R2
+    ${Loop}
+    FindClose $R1
+    ClearErrors
+    Pop $R9
+    Pop $R3
+    Pop $R2
+    Pop $R1
+  FunctionEnd
 
   ; Moves the player's files out of the installed version's folder (see KEEP_DIR_SUFFIX). Does
   ; nothing when no version is installed, or when it is installed at a drive's root.
@@ -408,6 +483,12 @@ var StartMenuShortcutCheckbox
   ${AndIfNot} ${UAC_IsAdmin}
   ${AndIf} ${isUpdated}
     !insertmacro updateLog "installed for all users: asking Windows for administrator rights"
+  ${EndIf}
+
+  ; An update started from a copy of the launcher in another folder goes into that folder.
+  ${If} ${isUpdated}
+  ${AndIfNot} ${UAC_IsInnerInstance}
+    Call useRunningLauncherFolder
   ${EndIf}
 
   ; Force silent mode for updates to make them seamless
@@ -675,6 +756,12 @@ var StartMenuShortcutCheckbox
     ${EndIf}
     SetErrorLevel 2
     Quit
+  ${EndIf}
+  ; The installed version is gone: an update into the running launcher's folder clears that copy's
+  ; files for the new ones (UPDATE_DIR_ENV). Not before: an update that stops here starts that copy.
+  ${If} $MovedFrom != ""
+    Call clearCopiedLauncher
+    StrCpy $MovedFrom ""
   ${EndIf}
 !macroend
 

@@ -36,6 +36,7 @@ import {
   INSTALLER_LOG_FILE,
   LauncherUpdateRequiredError,
   UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_DIR_ENV,
 } from "./app_updater";
 
 const autoUpdater = realAutoUpdater as unknown as EventEmitter & {
@@ -99,6 +100,13 @@ describe("AppUpdater", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.runIf(process.platform === "win32")(
+    "tells the Windows installer the folder it runs from (bug report #359)",
+    () => {
+      expect(process.env[UPDATE_DIR_ENV]).toBe(path.dirname(process.execPath));
+    },
+  );
 
   it("lets Dolphin start while no newer launcher is out", async () => {
     feedOffers(null);
