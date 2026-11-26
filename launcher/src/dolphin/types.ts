@@ -81,9 +81,17 @@ export type PlaybackOverlayToast = {
   folder: boolean;
 };
 
+/**
+ * The playback status events of the netplay game's room watch (room_watch_files.ts): only its clips' fields
+ * (`savedClips`, `renderRequests`, `showRender`) and `run`.
+ */
+export const ROOM_WATCH_INSTANCE_ID = "room-watch";
+
 /** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
 export type ReplayPlaybackStatus = {
   commandId?: string;
+  /** Room watch's (ROOM_WATCH_INSTANCE_ID): the netplay game's run, whose `seq`s count from 1. */
+  run?: string;
   /** `between`: a spectated set's next game is coming; `close`: a spectated stream's end asks to be closed. */
   /** `seeking`: highlights, on the way to the clip's first frame (a fast-forward). */
   /** `next`: Auto play's countdown at a spectated stream's end ran out: the launcher plays the next live game. */

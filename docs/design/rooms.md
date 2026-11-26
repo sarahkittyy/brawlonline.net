@@ -69,6 +69,7 @@ A member who is not in the room's game (sitting out, or joined during it) watche
 | 33a | Buffering | When the players' upload pauses (players first: their connection is busy, `spectating.md` §4.3; up to about 12 s, then a witness or the same uploader goes on) the watch runs out of frames and stands still. After 1 s of it: **"Buffering (the players' connection is busy), press B to return to CSS."**, the same line top left, yellow (bug report #171, 2026-10-27). The players' game is not affected by any of it. |
 | 34 | Launcher | **Not busy.** A launcher click (another room, an invite, Play unranked/ranked) while watching ends the watch and goes ahead once the game is back on the room CSS. |
 | 35 | Others' cards | A watcher's card is the grey SIT OUT card with **WATCHING** on its plate (default, not asked). |
+| 35a | Clips | **Clip and Render as in any replay** (Sarah's board, 2026-11-26: "it should be in room watch, along with render"): the seek bar's Clip, Save as highlight and Render work on the watched game. Only a clipped game is written to a file (`<Online>/RoomWatch/`, cleared at the next start); the launcher keeps a copy of it in Replays/Spectated with the clip in Highlights > Manual Clips (`highlights.md` §12). A game nobody clipped is discarded. |
 
 ### 1.4 Room names (the user's, 2026-10-27)
 

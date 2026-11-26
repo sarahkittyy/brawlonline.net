@@ -8,6 +8,10 @@
  * clip of one keeps a copy of the game in <Root Replay Folder>/Spectated, the clip pointing at the
  * copy. The game may still be going: the copy is cut after its last whole chunk (it plays as a
  * replay that ended there) and copied again as the game goes on, until its trailer is there.
+ *
+ * A room's game watched while sitting out (the netplay game's room watch, dolphin/room_watch_files.ts) is
+ * kept the same way: the game writes a clipped game to `<Online>/RoomWatch/` (cleared at its next start), and its
+ * clips come as a status too.
  */
 import { safeFileName } from "@dolphin/render_queue";
 import type { ReplayPlaybackStatus } from "@dolphin/types";
@@ -33,6 +37,8 @@ export type ManualClipsDeps = {
   save: (clips: ManualClip[]) => Promise<void>;
   /** `<playback User folder>/Spectate`. */
   spectateDir: () => string;
+  /** `<netplay User folder>/Online/RoomWatch` (room watch's clipped games). */
+  roomWatchDir?: () => string;
   /** The root replay folder. */
   replayDir: () => string;
 };
@@ -83,8 +89,17 @@ export class ManualClips {
   }
 
   private async add(clip: SavedClip) {
-    const spectated = isInside(clip.path, this.deps.spectateDir());
-    const file = spectated ? await this.keep(clip.path) : clip.path;
+    // (Room watch's files are named by the game's uid, so a file is always the same game; the spectate cache's
+    // names come again for other games.)
+    const watched = isInside(clip.path, this.deps.roomWatchDir?.() ?? "");
+    const spectated = watched || isInside(clip.path, this.deps.spectateDir());
+    // (A watched game's clips handed over again, by a launcher started while the game still runs: kept once.)
+    const again = (c: ManualClip) =>
+      c.source === clip.path && c.startFrame === clip.startFrame && c.endFrame === clip.endFrame;
+    if (watched && this.deps.clips().some(again)) {
+      return;
+    }
+    const file = spectated ? await this.keep(clip.path, watched) : clip.path;
     const known = this.deps
       .clips()
       .some((c) => c.path === file && c.startFrame === clip.startFrame && c.endFrame === clip.endFrame);
@@ -119,14 +134,18 @@ export class ManualClips {
     log.info(`manual clip kept: frames ${clip.startFrame}-${clip.endFrame} of ${file}`);
   }
 
-  /** The kept copy of the spectated game `source`, as far as it has come. */
-  private async keep(source: string): Promise<string> {
+  /** The kept copy of the spectated game `source`, as far as it has come (`watched`: room watch's). */
+  private async keep(source: string, watched: boolean): Promise<string> {
     let game = this.kept.get(source);
     if (!game) {
-      const header = await readReplayHeader(source);
-      const folder = path.join(this.deps.replayDir(), SPECTATED_FOLDER);
-      await mkdir(folder, { recursive: true });
-      const dest = await freeName(folder, spectatedName(header.meta, new Date()));
+      // (A watched game's copy made in an earlier launcher run, which another clip of it is in: the same copy.)
+      let dest = watched ? this.deps.clips().find((c) => c.source === source)?.path : undefined;
+      if (!dest) {
+        const header = await readReplayHeader(source);
+        const folder = path.join(this.deps.replayDir(), SPECTATED_FOLDER);
+        await mkdir(folder, { recursive: true });
+        dest = await freeName(folder, spectatedName(header.meta, new Date()));
+      }
       game = new KeptGame(source, dest);
       this.kept.set(source, game);
     }

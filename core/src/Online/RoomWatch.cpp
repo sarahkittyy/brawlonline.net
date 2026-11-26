@@ -11,12 +11,15 @@
 
 #include <fmt/format.h>
 
+#include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "BrawlOnline/Rollback/PeerData.h"
 #include "BrawlOnline/Rollback/ReplayFile.h"
 #include "Core/Online/RoomWatchInput.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace Online::RoomWatch
@@ -40,6 +43,15 @@ constexpr char BUFFERING_TEXT[] =
 // gfPadButtons (Rollback/GameplaySession.cpp HOLD_BUTTONS): START, B.
 constexpr u16 BUTTON_START = 0x1000;
 constexpr u16 BUTTON_B = 0x0200;
+// Clips (RoomWatch.h): the kept games' folder and the files shared with the launcher, in <Online>/.
+constexpr char KEPT_FOLDER[] = "RoomWatch";
+constexpr char CLIPS_FILE[] = "room-watch-clips.json";
+constexpr char OVERLAY_FILE[] = "room-watch-overlay.json";
+constexpr u64 MAX_OVERLAY_SIZE = 16 << 10;
+// (A run saves a few; as the playback Dolphin's.)
+constexpr size_t MAX_SAVED_CLIPS = 500;
+constexpr size_t MAX_KEPT_GAMES = 64;
+constexpr size_t MAX_MARKS = 500;
 
 void PutU16(std::vector<u8>& out, u16 v)
 {
@@ -217,6 +229,43 @@ struct State
   u32 buffering_toasts = 0;
   u32 bad_packets = 0;
   picojson::array results;  // each watched game's end (PlaybackStatus)
+
+  // Clips (RoomWatch.h). <Online>/ (Files; empty: not told yet) and this run's name for the
+  // launcher; the watched game's file (empty: it cannot be clipped).
+  std::string dir;
+  std::string run;
+  std::string armed_path;
+  struct SavedClip
+  {
+    std::string path;
+    s64 start = 0;
+    s64 end = 0;
+  };
+  std::vector<SavedClip> saved_clips;
+  struct RenderAsk
+  {
+    u64 seq = 0;
+    std::string path;
+    s64 start = 0;
+    s64 end = 0;
+    bool music = true;
+    bool clip = true;
+    std::string label;
+  };
+  std::vector<RenderAsk> render_asks;
+  u64 show_seq = 0;
+  std::string show_id;
+  // The games a clip was saved of: their file, how much of the game has been taken for it, what is
+  // still to be written (Files), and whether it was created.
+  struct Kept
+  {
+    std::array<u8, 16> uid{};
+    std::string path;
+    size_t taken = 0;
+    std::vector<u8> pending;
+    bool created = false;
+  };
+  std::vector<Kept> kept;
 };
 
 std::mutex s_mutex;
@@ -224,6 +273,139 @@ State s;
 std::atomic<bool> s_abort{false};
 std::atomic<bool> s_watching{false};
 std::atomic<bool> s_hold_feed{false};
+// CanSaveClip and ClipPath, as of the last Service (the overlay asks every frame).
+std::atomic<bool> s_can_clip{false};
+std::mutex s_clip_path_mutex;
+std::string s_clip_path;
+// Files' own (the Rooms thread's): the clips file and the overlay file as last written / read.
+std::string s_clips_written;
+std::string s_overlay_read;
+
+std::string HexOf(const std::array<u8, 16>& uid)
+{
+  std::string out;
+  for (const u8 b : uid)
+    out += fmt::format("{:02x}", b);
+  return out;
+}
+
+// Under s_mutex: what has come of a kept game since it was last taken, to be written.
+void TakeBytes(State::Kept& k, const Game& g)
+{
+  if (g.bytes.size() <= k.taken)
+    return;
+  k.pending.insert(k.pending.end(), g.bytes.begin() + static_cast<std::ptrdiff_t>(k.taken), g.bytes.end());
+  k.taken = g.bytes.size();
+}
+
+// Under s_mutex: `g` is about to be dropped; if it is kept, the rest of it is taken first.
+void TakeBeforeDrop(const Game& g)
+{
+  for (auto& k : s.kept)
+  {
+    if (k.uid == g.uid)
+      TakeBytes(k, g);
+  }
+}
+
+// Under s_mutex: the clips saved of the watched game as stars on its seek bar (a click plays one).
+void ApplyMarks()
+{
+  std::vector<Session::PlaybackMark> marks;
+  for (const auto& c : s.saved_clips)
+  {
+    if (c.path == s.armed_path && marks.size() < MAX_MARKS)
+      marks.push_back({c.start, c.end, marks.size(), 0, true});
+  }
+  Session::SetPlaybackMarks(std::move(marks));
+}
+
+// Under s_mutex: the watched game plays here, as its clips need (the overlay's view may be a
+// Service old).
+bool ClipAllowedLocked()
+{
+  if (!s.armed || s.leaving || s.armed_path.empty())
+    return false;
+  const Session::PlaybackView pv = Session::GetPlaybackView();
+  return pv.active && pv.room_watch && pv.serial == s.armed_serial;
+}
+
+// Under s_mutex: the CanSaveClip / ClipPath the overlay reads.
+void UpdateClipView()
+{
+  const bool can = ClipAllowedLocked();
+  s_can_clip = can;
+  std::lock_guard pk(s_clip_path_mutex);
+  s_clip_path = can ? s.armed_path : std::string();
+}
+
+// Under s_mutex: SaveClip's work.
+bool SaveClipLocked(s64 start, s64 end)
+{
+  if (!ClipAllowedLocked() || end <= start || s.saved_clips.size() >= MAX_SAVED_CLIPS)
+    return false;
+  const bool known = std::any_of(s.saved_clips.begin(), s.saved_clips.end(), [&](const State::SavedClip& c) {
+    return c.path == s.armed_path && c.start == start && c.end == end;
+  });
+  if (!known)
+  {
+    const bool kept = std::any_of(s.kept.begin(), s.kept.end(),
+                                  [&](const State::Kept& k) { return k.uid == s.armed_uid; });
+    if (!kept)
+    {
+      if (s.kept.size() >= MAX_KEPT_GAMES)
+        return false;
+      State::Kept k;
+      k.uid = s.armed_uid;
+      k.path = s.armed_path;
+      s.kept.push_back(std::move(k));
+    }
+    s.saved_clips.push_back({s.armed_path, start, end});
+    ApplyMarks();
+  }
+  NOTICE_LOG_FMT(NETPLAY, "RoomWatch: clip saved, frames {} to {} of {}", start, end, s.armed_path);
+  return true;
+}
+
+picojson::object ClipsJsonLocked()
+{
+  picojson::object o;
+  o["version"] = picojson::value(1.0);
+  o["run"] = picojson::value(s.run);
+  picojson::array clips;
+  for (const auto& c : s.saved_clips)
+  {
+    picojson::object clip;
+    clip["path"] = picojson::value(c.path);
+    clip["startFrame"] = picojson::value(static_cast<double>(c.start));
+    clip["endFrame"] = picojson::value(static_cast<double>(c.end));
+    clips.emplace_back(std::move(clip));
+  }
+  o["savedClips"] = picojson::value(std::move(clips));
+  picojson::array asks;
+  for (const auto& a : s.render_asks)
+  {
+    picojson::object ask;
+    ask["seq"] = picojson::value(static_cast<double>(a.seq));
+    ask["path"] = picojson::value(a.path);
+    ask["startFrame"] = picojson::value(static_cast<double>(a.start));
+    ask["endFrame"] = picojson::value(static_cast<double>(a.end));
+    ask["music"] = picojson::value(a.music);
+    ask["clip"] = picojson::value(a.clip);
+    if (!a.label.empty())
+      ask["label"] = picojson::value(a.label);
+    asks.emplace_back(std::move(ask));
+  }
+  o["renderRequests"] = picojson::value(std::move(asks));
+  if (s.show_seq > 0)
+  {
+    picojson::object show;
+    show["seq"] = picojson::value(static_cast<double>(s.show_seq));
+    show["id"] = picojson::value(s.show_id);
+    o["showRender"] = picojson::value(std::move(show));
+  }
+  return o;
+}
 
 std::string WatchJson(std::optional<bool> want, std::optional<bool> watching)
 {
@@ -294,6 +476,10 @@ void EndWatch(std::vector<std::string>* out, bool done)
   s.armed = false;
   s.leaving = false;
   s_watching = false;
+  s.armed_path.clear();
+  // (A kept game's file gets the rest of it, whatever is dropped here.)
+  if (!s.assembler.Games().empty() && s.assembler.Games().front().uid == s.armed_uid)
+    TakeBeforeDrop(s.assembler.Games().front());
   if (done && !s.assembler.Games().empty() && s.assembler.Games().front().uid == s.armed_uid)
     s.assembler.Games().pop_front();
   if (s.watching_sent)
@@ -329,6 +515,9 @@ std::optional<Replay::File> ParseGame(const Game& g)
 void OnPacket(std::span<const u8> data)
 {
   std::lock_guard lk(s_mutex);
+  // (A game's start can drop the oldest game, MAX_GAMES: a kept one has the rest of it first.)
+  if (!data.empty() && data[0] == KIND_BEGIN && s.assembler.Games().size() >= MAX_GAMES)
+    TakeBeforeDrop(s.assembler.Games().front());
   if (!s.assembler.OnPacket(data))
   {
     ++s.bad_packets;
@@ -341,6 +530,11 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
 {
   std::vector<std::string> out;
   std::lock_guard lk(s_mutex);
+  // (Whichever way it returns: the overlay's CanSaveClip as things are now.)
+  struct ClipViewOnReturn
+  {
+    ~ClipViewOnReturn() { UpdateClipView(); }
+  } clip_view;
   const bool abort = s_abort.exchange(false);
   if (!room.online || !room.in_room)
   {
@@ -498,6 +692,8 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
   s.armed = true;
   s.armed_serial = Session::GetPlaybackView().serial;
   s.armed_uid = g.uid;
+  // Where its file goes once a clip of it is saved (RoomWatch.h).
+  s.armed_path = s.dir.empty() ? std::string() : s.dir + KEPT_FOLDER + "/" + HexOf(g.uid) + ".brep";
   s.armed_at = now;
   s.fed_size = g.bytes.size();
   s.fed_done = g.Done();
@@ -564,6 +760,136 @@ picojson::object Status()
   }
   o["games"] = picojson::value(games);
   o["results"] = picojson::value(s.results);
+  // Clips (RoomWatch.h).
+  o["can_clip"] = picojson::value(s_can_clip.load());
+  o["clip_path"] = picojson::value(s.armed_path);
+  o["clips"] = picojson::value(ClipsJsonLocked());
+  picojson::array kept;
+  for (const auto& k : s.kept)
+  {
+    picojson::object ko;
+    ko["path"] = picojson::value(k.path);
+    ko["taken"] = picojson::value(static_cast<double>(k.taken));
+    ko["pending"] = picojson::value(static_cast<double>(k.pending.size()));
+    ko["created"] = picojson::value(k.created);
+    kept.emplace_back(std::move(ko));
+  }
+  o["kept"] = picojson::value(std::move(kept));
   return o;
+}
+
+bool CanSaveClip()
+{
+  return s_can_clip.load();
+}
+
+bool SaveClip(s64 start, s64 end)
+{
+  std::lock_guard lk(s_mutex);
+  return SaveClipLocked(start, end);
+}
+
+bool RequestRender(s64 start, s64 end, bool music, bool save, const std::string& label)
+{
+  std::lock_guard lk(s_mutex);
+  // (Clip mode's is saved first, as Save as highlight: the launcher renders the Manual Clip it
+  // keeps of it. A star's is one of the clips saved here already.)
+  if (s.render_asks.size() >= MAX_SAVED_CLIPS || end <= start ||
+      !(save ? SaveClipLocked(start, end) : ClipAllowedLocked()))
+  {
+    return false;
+  }
+  const u64 seq = s.render_asks.size() + 1;
+  s.render_asks.push_back({seq, s.armed_path, start, end, music, save, label.substr(0, 120)});
+  NOTICE_LOG_FMT(NETPLAY, "RoomWatch: render {} asked for, frames {} to {} ({})", seq, start, end,
+                 music ? "music" : "no music");
+  return true;
+}
+
+void ShowRenderFolder(const std::string& id)
+{
+  std::lock_guard lk(s_mutex);
+  ++s.show_seq;
+  s.show_id = id.substr(0, 128);
+}
+
+std::string ClipPath()
+{
+  std::lock_guard pk(s_clip_path_mutex);
+  return s_clip_path;
+}
+
+void Files(const std::string& online_dir)
+{
+  struct Write
+  {
+    std::string path;
+    std::vector<u8> bytes;
+    bool create = false;
+  };
+  std::vector<Write> writes;
+  std::string clips_text;
+  bool first = false;
+  {
+    std::lock_guard lk(s_mutex);
+    if (s.dir != online_dir)
+    {
+      first = s.dir.empty();
+      s.dir = online_dir;
+      s.run = fmt::format("{}", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count());
+    }
+    for (auto& k : s.kept)
+    {
+      for (const Game& g : s.assembler.Games())
+      {
+        if (g.uid == k.uid)
+          TakeBytes(k, g);
+      }
+      if (k.pending.empty())
+        continue;
+      writes.push_back({k.path, std::move(k.pending), !k.created});
+      k.pending.clear();
+      k.created = true;
+    }
+    if (!s.saved_clips.empty() || !s.render_asks.empty() || s.show_seq > 0)
+      clips_text = picojson::value(ClipsJsonLocked()).serialize();
+  }
+  // The last run's kept games and clips: the launcher has its copies of them by now.
+  if (first)
+  {
+    File::DeleteDirRecursively(online_dir + KEPT_FOLDER);
+    File::Delete(online_dir + CLIPS_FILE, File::IfAbsentBehavior::NoConsoleWarning);
+    s_clips_written.clear();
+    s_overlay_read.clear();
+  }
+  // The games first: a clip the launcher reads is of a file that is there.
+  for (const Write& w : writes)
+  {
+    File::CreateFullPath(w.path);
+    File::IOFile f(w.path, w.create ? "wb" : "ab");
+    if (!f.IsOpen() || !f.WriteBytes(w.bytes.data(), w.bytes.size()))
+      WARN_LOG_FMT(NETPLAY, "RoomWatch: cannot write the kept game {}", w.path);
+  }
+  if (!clips_text.empty() && clips_text != s_clips_written)
+  {
+    const std::string path = online_dir + CLIPS_FILE;
+    const std::string tmp = path + ".tmp";
+    if (File::WriteStringToFile(tmp, clips_text) && File::Rename(tmp, path))
+      s_clips_written = clips_text;
+    else
+      WARN_LOG_FMT(NETPLAY, "RoomWatch: cannot write {}", path);
+  }
+  // The launcher's side of the seek bar.
+  std::string overlay;
+  const std::string overlay_path = online_dir + OVERLAY_FILE;
+  if (File::Exists(overlay_path) && File::GetSize(overlay_path) <= MAX_OVERLAY_SIZE)
+    File::ReadFileToString(overlay_path, overlay);
+  if (overlay != s_overlay_read)
+  {
+    s_overlay_read = overlay;
+    Gprb::Replay::Playback::SetRoomWatchOverlay(overlay);
+  }
 }
 }  // namespace Online::RoomWatch

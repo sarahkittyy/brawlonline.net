@@ -64,6 +64,9 @@
 // and asks the launcher to render it to video: "renderRequests": [{"seq", "path", "startFrame",
 // "endFrame", "music", "clip"}, ...] (every one of this run, seq from 1; the launcher renders each
 // once). A star's highlight playing has Render too, not saved ("clip": false).
+// Without a comm file (the netplay Dolphin, EmissaryRecomp), Clip, Render and the launcher's side
+// of the overlay are room watch's (Online/RoomWatch.h: the room's game watched from the room CSS),
+// with the same fields in <Online>/room-watch-clips.json and room-watch-overlay.json.
 //
 // The launcher's side of the overlay, <comm.json>.overlay.json (read every poll; none: nothing):
 //   {"accent": "#rrggbb" (the launcher's colour: the seek bar's played part),
@@ -99,7 +102,8 @@ bool Following();
 std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, bool hold_at_end = false);
 picojson::object Status();
 // Whether a clip can be saved: a launcher follows this Dolphin (the comm file) and a replay of its
-// request is armed, not rendered.
+// request is armed, not rendered; or, without a comm file, the room's game watched here can be
+// clipped (Online/RoomWatch.h). SaveClip, RequestRender and ShowRenderFolder go there then too.
 bool CanSaveClip();
 // The overlay's list buttons (the request's "nav"): shown, "position/total", whether there is a
 // replay before or after this one in the list, and whether < > (clips) are there too (a list of
@@ -165,6 +169,9 @@ struct OverlayView
   std::vector<OverlayToast> toasts;
 };
 OverlayView GetOverlayView();
+// Room watch's room-watch-overlay.json as read (Online/RoomWatch.h, the Rooms thread): the view
+// GetOverlayView gives when no comm file is followed.
+void SetRoomWatchOverlay(const std::string& text);
 
 // Auto play's countdown at a spectated stream's end: shown, until when (none: it ran out and the
 // launcher is getting the next game). Any thread.

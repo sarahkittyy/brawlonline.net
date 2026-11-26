@@ -107,6 +107,7 @@ import { RenderQueue } from "./render_queue";
 import type { NetplayStart } from "./repeat_play";
 import { repeatsStart, SharedStart } from "./repeat_play";
 import { clearRoomRequest } from "./room_handoff";
+import { RoomWatchFiles } from "./room_watch_files";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type {
   DolphinEvent,
@@ -121,10 +122,12 @@ import type {
   SpectatorChatFile,
   SpectatorListFile,
 } from "./types";
-import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
+import { DolphinErrorType, DolphinEventType, DolphinLaunchType, ROOM_WATCH_INSTANCE_ID } from "./types";
 
 /** Progress events are sent at most this often per launch type (a 2 GB step has thousands of chunks). */
 const PROGRESS_INTERVAL_MS = 100;
+/** How often the open netplay game's room watch clips file is looked at (room_watch_files.ts). */
+const ROOM_WATCH_POLL_MS = 1000;
 
 const PPLUS_PHASES: Record<PPlusProgress["phase"], DolphinSetupPhase> = {
   download: "downloadProjectPlus",
@@ -197,6 +200,41 @@ export class DolphinManager {
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
+
+  /** Room watch's clips in the open netplay game (followRoomWatchClips). */
+  private roomWatchFiles: RoomWatchFiles | null = null;
+
+  /**
+   * Room watch's clips in the open netplay game (room_watch_files.ts): its clips file as playback statuses of
+   * ROOM_WATCH_INSTANCE_ID (manual_clips.ts, use_playback_overlay.ts), and the seek bar's launcher side
+   * (setPlaybackOverlay's) written for it. Once, at the start.
+   */
+  followRoomWatchClips(): void {
+    if (this.roomWatchFiles) {
+      return;
+    }
+    const files = new RoomWatchFiles({
+      onlineDir: () => {
+        if (!this.netplayDolphinInstance) {
+          return null;
+        }
+        try {
+          return this.netplayOnlineDir();
+        } catch {
+          return null;
+        }
+      },
+      overlay: () => this.playbackOverlay,
+      onStatus: (status) =>
+        this.eventSubject.next({ type: DolphinEventType.PLAYBACK_STATUS, instanceId: ROOM_WATCH_INSTANCE_ID, status }),
+    });
+    this.roomWatchFiles = files;
+    const timer = setInterval(
+      () => void files.tick().catch((err) => log.warn(`room watch clips: ${err}`)),
+      ROOM_WATCH_POLL_MS,
+    );
+    timer.unref?.();
+  }
 
   private renderQueue: RenderQueue | null = null;
 

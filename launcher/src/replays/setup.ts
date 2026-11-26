@@ -1,5 +1,6 @@
 import { createDatabase } from "@database/create_database";
 import type { DolphinManager } from "@dolphin/manager";
+import { ROOM_WATCH_FOLDER } from "@dolphin/room_watch_files";
 import { DolphinEventType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
@@ -99,10 +100,12 @@ export default function setupReplaysIpc({
   );
 
   // The playback Dolphin's seek bar clips (Clip, then "Save as highlight"): Replays > Highlights > Manual Clips.
+  // Room watch's in the netplay game too (dolphin/room_watch_files.ts), as statuses of its own.
   const manualClips = new ManualClips({
     clips: () => settingsManager.get().settings.manualClips,
     save: (clips) => settingsManager.updateSetting("manualClips", clips),
     spectateDir: () => dolphinManager.spectateDir(),
+    roomWatchDir: () => path.join(dolphinManager.netplayOnlineDir(), ROOM_WATCH_FOLDER),
     replayDir: () => settingsManager.getRootSlpPath(),
   });
   dolphinManager.events.subscribe((event) => {
@@ -110,6 +113,7 @@ export default function setupReplaysIpc({
       manualClips.onStatus(event.status);
     }
   });
+  dolphinManager.followRoomWatchClips();
 
   // A replay played gets its highlights, hotkey clips and manual clips as stars on the seek bar.
   dolphinManager.replayMarks = (paths) =>

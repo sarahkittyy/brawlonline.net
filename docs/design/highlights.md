@@ -594,3 +594,44 @@ for `next`; the X ends the wait); harness `test_replay.py::test_launcher_comm_fi
 rewrite, only its path's, one with a saved clip; a star playing and pausing at its end; Render with
 and without music in `renderRequests` and `savedClips`; the overlay file read and a broken one
 ignored; Auto play's countdown on a finished stream, held in clip mode, then `next`, and its X).
+
+## 12. Clip and Render in room watch (2026-11-26)
+
+Sarah's board: "i wasn't seeing the clip game while sitting out in a room with friends", then "it
+should be in room watch, along with render. games you watch while sitting out can be saved to file
+somewhere but probably not saved to replays unless you actually clip something. they should get
+discarded if you didn't."
+
+A room's game watched while sitting out (or after joining during it, `rooms.md` §1.3) plays in the
+player's own netplay game (Dolphin, or EmissaryRecomp: the same core), not in the launcher's
+playback Dolphin, so its seek bar had no Clip: `Replay::Playback::CanSaveClip` needs the
+launcher's comm file, and the watched game was only in memory. Now, without a comm file, Clip,
+Save as highlight, Render (w/ Music) / Render (No Music), a star's Render and the render's folder
+button are room watch's (`Online/RoomWatch.h`), with the overlay unchanged:
+
+- **The game's file.** A watched game stays in memory, as before. Once a clip of it is saved (Save
+  as highlight, or clip mode's Render) it is written to `<Online>/RoomWatch/<game uid>.brep` (the
+  chunks as they came, a live replay file), and on as more comes, to the game's end (or what came
+  before B). A game nobody clipped is never written. The folder is cleared at the game's next start
+  (Rooms' first file step), by when the launcher has its copy.
+- **The launcher.** The game lists its clips and renders in `<Online>/room-watch-clips.json`
+  (`{version: 1, run, savedClips, renderRequests, showRender?}`, the fields of the playback
+  Dolphin's status; written after the game's file, so a clip read is of a file that is there). The
+  launcher reads it every second while a netplay game is open (`dolphin/room_watch_files.ts`) and
+  hands it on as a playback status of its own: Manual Clips keeps each clip as a spectated game's
+  (§9: a copy in `<Root Replay Folder>/Spectated`, "… Spectated Room G2 - A vs B", followed while it
+  grows; the clip in Replays > Highlights > Manual Clips), and the renders go to the render queue
+  as the playback Dolphin's do (§11). So only a clipped game reaches the replays, as Sarah asked.
+- **The seek bar's launcher side.** The launcher writes the playback Dolphins' overlay (its colour,
+  clip mode's, the renders' progress and folder buttons) to `<Online>/room-watch-overlay.json` too;
+  the game reads it in the same file step. Room watch's bar now has the launcher's colour as well.
+- **Stars.** A clip saved shows as a star on the watched game's bar at once, as in the playback
+  Dolphin; a click plays it again.
+
+Defaults (not asked): the RoomWatch folder is the game's (`<User>/Online/`, next to its other
+launcher files) rather than the replay folder, so nothing lands in the replays unless the launcher
+keeps a clip; a launcher started while the game still runs reads the clips file again and keeps
+each clip once (a watched game's copy is found by its source file, named by the game's uid).
+Checked by `harness/tests/test_room_watch.py::test_a_sitter_watches_the_rooms_game` (game 1 clipped
+and its file whole after the game; game 2 not clipped, never written) and the launcher's
+`room_watch_files.test.ts` / `manual_clips.test.ts`.

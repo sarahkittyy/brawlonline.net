@@ -1847,6 +1847,8 @@ void Thread()
       PollInputDelayRequest();
       InputView::PollLauncherFile(OnlineDir());
       ModsRoom::Files(OnlineDir());
+      // Room watch's clips: the kept games' files, the clips for the launcher (Online/RoomWatch.h).
+      RoomWatch::Files(OnlineDir());
       const DolphinBusy busy = QueryBusy();
       {
         std::lock_guard lk(s_mutex);

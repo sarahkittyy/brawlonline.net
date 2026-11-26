@@ -8,6 +8,9 @@ three Dolphins against our local accounts + mm servers with spectating on, as te
   room CSS first, and C's screen says "Game ended, press B to return to CSS.". Game 2 starts
   without waiting for C, and C is back on the room CSS after game 1, then watches game 2 too.
 - B on C's controller ends the watch at once: C is back on the room CSS while A and B play on.
+- C clips game 1 while watching it (the seek bar's Clip, then Save as highlight and Render; Sarah's board,
+  2026-11-26): only then is game 1 written to C's Online/RoomWatch, and it grows there to the game's end;
+  room-watch-clips.json lists the clip and the render for the launcher. Game 2, not clipped, is never written.
 - The players' games are a normal room game: no checksum mismatch, the same session as without a
   watcher (nothing changes on the players' side; the watcher only reads what mm already keeps).
 
@@ -16,9 +19,11 @@ Screenshots: run/artifacts/game-code/rooms/<test>/<player>/.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
@@ -32,6 +37,7 @@ from test_rooms_game import (CSS, create_room, online_set, pick, ppom, room_view
                              until_view)
 from test_room_sit_out import _join, _open_slot, _phase, _plate, _players, _short_rules
 from ppharness import brawl as B
+from ppharness import replay as R
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -89,6 +95,41 @@ def _pick_stage_if_asked(picker: Game, others: list[Game]) -> None:
         B.sss_pick_stage(picker.c, B.STAGE_KIND[online_set.STAGE_PICK], 0)
 
 
+def _clip_while_watching(c: Game) -> Path:
+    """The seek bar's Clip on the game `c` watches: the last 10 s saved as a highlight, then rendered (w/ Music).
+    Nothing of the game is on disk before; then its file is, and room-watch-clips.json says both for the launcher.
+    The game's file."""
+    online = c.inst.user_dir / "Online"
+    kept_dir = online / "RoomWatch"
+    assert not list(kept_dir.glob("*.brep")), list(kept_dir.iterdir())
+    _wait(lambda: _watch(c)["can_clip"], 10, "C's Clip")
+    st = c.c.call("replay_status")
+    end = int(st["shown"])
+    start = max(int(st["first_frame"]), end - 600)
+    saved = c.c.call("replay_save_clip", start=start, end=end)
+    assert saved["can_save"] and saved["saved"], saved
+    rendered = c.c.call("replay_save_clip", start=start, end=end, render="music")
+    assert rendered["saved"], rendered
+    path = Path(_watch(c)["clip_path"])
+    assert path.parent.resolve() == kept_dir.resolve(), path
+    clips_file = online / "room-watch-clips.json"
+    _wait(lambda: clips_file.exists() and path.exists(), 10, "the clips file and the kept game")
+    clips = json.loads(clips_file.read_text())
+    print("C's room-watch-clips.json:", clips, flush=True)
+    assert clips["version"] == 1 and clips["run"], clips
+    assert [Path(x["path"]).resolve() for x in clips["savedClips"]] == [path.resolve()], clips
+    assert [(x["startFrame"], x["endFrame"]) for x in clips["savedClips"]] == [(start, end)], clips
+    asks = clips["renderRequests"]
+    assert [(x["seq"], x["startFrame"], x["endFrame"], x["music"], x["clip"]) for x in asks] ==         [(1, start, end, True, True)], clips
+    # Its star on the seek bar.
+    marks = c.c.call("replay_status")["marks"]
+    assert any(m["saved"] and m["start"] == start and m["end"] == end for m in marks), marks
+    # The file grows as the game comes.
+    size = path.stat().st_size
+    _wait(lambda: path.stat().st_size > size, 30, "the kept game growing")
+    return path
+
+
 def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
                                          dolphin: Callable[..., DolphinInstance],
                                          gpu_backend: str) -> None:
@@ -125,6 +166,7 @@ def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
     c.steps("wait 240")
     c.shot("01-c-watches-game-1")
     a.shot("01-a-plays-c-watching")
+    kept_game = _clip_while_watching(c)
     t1.join(900)
     assert 1 in reports, "game 1 did not finish"
     _wait(lambda: all(g.scene() == CSS for g in (a, b)), 180, "A and B back on the room's CSS")
@@ -157,6 +199,11 @@ def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
     assert r1["started"] and r1["finished"] and not r1["left_early"], w
     played = min(reports[1]["frames"])
     assert r1["desync_frame"] == -1 and r1["frames_checked"] >= played - 30, (played, w)
+    # The clipped game's file has all of it.
+    _wait(lambda: all(k["pending"] == 0 for k in _watch(c)["kept"]), 10, "game 1's file written to its end")
+    rep = R.read(kept_game)
+    print(f"C's kept game 1: frames {rep.first_frame}..{rep.last_frame}, endg {rep.endg}", flush=True)
+    assert rep.endg is not None and rep.last_frame - rep.first_frame >= played - 30, (played, rep.last_frame)
     if behind:
         assert w["toasts"] > 0, w
 
@@ -174,6 +221,8 @@ def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
     # game can be over before its upload's 10 s hold).
     time.sleep(5)
     assert not _watch(c)["games"] and _watch(c)["skip"], _watch(c)
+    # Game 2 was watched without a clip: nothing of it was written.
+    assert sorted(kept_game.parent.glob("*.brep")) == [kept_game], list(kept_game.parent.iterdir())
     t2.join(900)
     assert 2 in reports, "game 2 did not finish"
 

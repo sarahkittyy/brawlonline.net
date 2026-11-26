@@ -23,6 +23,7 @@
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "BrawlOnline/Online/GameBridge.h"
+#include "BrawlOnline/Online/RoomWatch.h"
 #include "BrawlOnline/Online/SpectatorChat.h"
 #include "Core/Rollback/ClipRecorder.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
@@ -197,6 +198,8 @@ std::atomic<bool> s_clip_mode{false};
 std::string s_overlay_text;
 std::mutex s_overlay_mutex;
 Playback::OverlayView s_overlay_view;
+// Room watch's (room-watch-overlay.json, Online/RoomWatch.h), shown when no comm file is followed.
+Playback::OverlayView s_watch_overlay_view;
 constexpr size_t MAX_OVERLAY_SIZE = 16 << 10;
 constexpr size_t MAX_TOASTS = 24;
 // A finished render's folder button: the last one asked (from 1 for the Dolphin's run).
@@ -1081,16 +1084,10 @@ void UpdateNavView()
   s_next_view = n;
 }
 
-// The launcher's <comm>.overlay.json (its accent colour, its renders' progress), when it changed.
-void FollowOverlay()
+// The launcher's side of the seek bar (<comm>.overlay.json, or room watch's
+// room-watch-overlay.json): its accent colour, its renders' progress.
+Playback::OverlayView ParseOverlay(const std::string& text)
 {
-  std::string text;
-  const std::string path = s_comm_path + ".overlay.json";
-  if (::File::Exists(path) && ::File::GetSize(path) <= MAX_OVERLAY_SIZE)
-    ::File::ReadFileToString(path, text);
-  if (text == s_overlay_text)
-    return;
-  s_overlay_text = text;
   Playback::OverlayView v;
   picojson::value root;
   if (!text.empty() && picojson::parse(root, text).empty() && root.is<picojson::object>())
@@ -1157,6 +1154,20 @@ void FollowOverlay()
       }
     }
   }
+  return v;
+}
+
+// The launcher's <comm>.overlay.json, when it changed.
+void FollowOverlay()
+{
+  std::string text;
+  const std::string path = s_comm_path + ".overlay.json";
+  if (::File::Exists(path) && ::File::GetSize(path) <= MAX_OVERLAY_SIZE)
+    ::File::ReadFileToString(path, text);
+  if (text == s_overlay_text)
+    return;
+  s_overlay_text = text;
+  Playback::OverlayView v = ParseOverlay(text);
   std::lock_guard ok(s_overlay_mutex);
   s_overlay_view = std::move(v);
 }
@@ -1424,11 +1435,20 @@ std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, b
 
 bool CanSaveClip()
 {
+  // (No comm file: the netplay Dolphin, whose room watch has clips of its own, Online/RoomWatch.h.)
+  if (!Following())
+    return Online::RoomWatch::CanSaveClip();
   return s_can_save_clip.load(std::memory_order_relaxed);
 }
 
 NavView GetNav()
 {
+  if (!Following())
+  {
+    NavView v;
+    v.armed_path = Online::RoomWatch::ClipPath();
+    return v;
+  }
   std::lock_guard nk(s_nav_mutex);
   return s_nav_view;
 }
@@ -1473,6 +1493,8 @@ bool SaveClipLocked(s64 start, s64 end)
 
 bool SaveClip(s64 start, s64 end)
 {
+  if (!Following())
+    return Online::RoomWatch::SaveClip(start, end);
   std::lock_guard lk(s_mutex);
   if (!SaveClipLocked(start, end))
     return false;
@@ -1482,6 +1504,8 @@ bool SaveClip(s64 start, s64 end)
 
 bool RequestRender(s64 start, s64 end, bool music, bool save, const std::string& label)
 {
+  if (!Following())
+    return Online::RoomWatch::RequestRender(start, end, music, save, label);
   std::lock_guard lk(s_mutex);
   // (Clip mode's is saved first, as Save as highlight: the launcher renders the Manual Clip it
   // keeps of it. A star's is a highlight, a hotkey clip or a Manual Clip already.)
@@ -1500,6 +1524,11 @@ bool RequestRender(s64 start, s64 end, bool music, bool save, const std::string&
 
 void ShowRenderFolder(const std::string& id)
 {
+  if (!Following())
+  {
+    Online::RoomWatch::ShowRenderFolder(id);
+    return;
+  }
   std::lock_guard lk(s_mutex);
   ++s_show_seq;
   s_show_id = id.substr(0, 128);
@@ -1509,7 +1538,14 @@ void ShowRenderFolder(const std::string& id)
 OverlayView GetOverlayView()
 {
   std::lock_guard ok(s_overlay_mutex);
-  return s_overlay_view;
+  return Following() ? s_overlay_view : s_watch_overlay_view;
+}
+
+void SetRoomWatchOverlay(const std::string& text)
+{
+  OverlayView v = ParseOverlay(text);
+  std::lock_guard ok(s_overlay_mutex);
+  s_watch_overlay_view = std::move(v);
 }
 
 NextCountdown GetNextCountdown()

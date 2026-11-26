@@ -101,24 +101,31 @@ describe("ManualClips", () => {
   let root: string;
   let replays: string;
   let spectate: string;
+  let roomWatch: string;
   let stored: ManualClip[];
   let clips: ManualClips;
 
-  beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), "manual-clips-"));
-    replays = path.join(root, "Replays");
-    spectate = path.join(root, "User", "Spectate");
-    await mkdir(replays, { recursive: true });
-    await mkdir(path.join(spectate, "s1"), { recursive: true });
-    stored = [];
-    clips = new ManualClips({
+  const newClips = () =>
+    new ManualClips({
       clips: () => stored,
       save: async (next) => {
         stored = next;
       },
       spectateDir: () => spectate,
+      roomWatchDir: () => roomWatch,
       replayDir: () => replays,
     });
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "manual-clips-"));
+    replays = path.join(root, "Replays");
+    spectate = path.join(root, "User", "Spectate");
+    roomWatch = path.join(root, "Netplay", "Online", "RoomWatch");
+    await mkdir(replays, { recursive: true });
+    await mkdir(path.join(spectate, "s1"), { recursive: true });
+    await mkdir(roomWatch, { recursive: true });
+    stored = [];
+    clips = newClips();
   });
 
   afterEach(async () => {
@@ -187,5 +194,46 @@ describe("ManualClips", () => {
     expect(await readFile(dest)).toEqual(Buffer.concat([start, end]));
     expect(await readdir(path.join(replays, SPECTATED_FOLDER))).toHaveLength(1);
     expect(stored.map((c) => c.path)).toEqual([dest, dest]);
+  });
+
+  it("keeps a room game watched while sitting out as a spectated game, once, also for a later launcher run", async () => {
+    const { start, end } = replayParts();
+    const source = path.join(roomWatch, "abababababababababababababababab.brep");
+    await writeFile(source, start);
+    clips.onStatus({ run: "1", savedClips: [{ path: source, startFrame: 100, endFrame: 400 }] });
+    await clips.idle();
+    const kept = await readdir(path.join(replays, SPECTATED_FOLDER));
+    expect(kept).toHaveLength(1);
+    const dest = path.join(replays, SPECTATED_FOLDER, kept[0]);
+    expect(await readFile(dest)).toEqual(start);
+    expect(stored).toEqual([
+      expect.objectContaining({
+        path: dest,
+        source,
+        startFrame: 100,
+        endFrame: 400,
+        spectated: true,
+        recorderPort: null,
+      }),
+    ]);
+
+    // A launcher started while the game still runs reads its clips file again, then a clip more of the same game:
+    // the clip is kept once, and the new one goes with the same copy, which takes what came since.
+    await writeFile(source, Buffer.concat([start, end]));
+    const again = newClips();
+    again.onStatus({
+      run: "1",
+      savedClips: [
+        { path: source, startFrame: 100, endFrame: 400 },
+        { path: source, startFrame: 900, endFrame: 1300 },
+      ],
+    });
+    await again.idle();
+    expect(await readdir(path.join(replays, SPECTATED_FOLDER))).toEqual(kept);
+    expect(await readFile(dest)).toEqual(Buffer.concat([start, end]));
+    expect(stored.map((c) => [c.path, c.startFrame])).toEqual([
+      [dest, 100],
+      [dest, 900],
+    ]);
   });
 });

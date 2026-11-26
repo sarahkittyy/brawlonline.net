@@ -6,10 +6,13 @@
  * then; a star's highlight playing has Render too, named from the replay's highlight), and the render's progress
  * shows in the game, at its top right.
  *
+ * The netplay game's room watch (a room's game watched while sitting out) has the same Clip and Render: its asks come
+ * as statuses of ROOM_WATCH_INSTANCE_ID (dolphin/room_watch_files.ts), and its seek bar gets this overlay too.
+ *
  * Mounted once for the whole window (app/create.tsx).
  */
 import type { DolphinService, PlaybackOverlayFile, PlaybackOverlayToast, RenderJobInfo } from "@dolphin/types";
-import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
+import { DolphinEventType, DolphinLaunchType, ROOM_WATCH_INSTANCE_ID } from "@dolphin/types";
 import type { HighlightPlayer } from "@replays/highlights/types";
 import { useEffect, useRef } from "react";
 
@@ -81,9 +84,10 @@ export const usePlaybackOverlay = () => {
   useEffect(() => {
     let accent: string | null = null;
     let lastSent = "";
-    // Renders asked for in this playback Dolphin's run (its seqs start at 1 again in the next one).
-    let handled = new Set<number>();
-    let shownSeq = 0;
+    // Renders asked for in each game's run (its seqs start at 1 again in the next one): the playback Dolphin's, and
+    // room watch's per run of the netplay game; and the last folder button followed of each.
+    const handled = new Map<string, Set<number>>();
+    const shownSeq = new Map<string, number>();
     const tracked = new Map<string, Tracked>();
     let alive = true;
 
@@ -157,20 +161,26 @@ export const usePlaybackOverlay = () => {
     };
 
     const offStatus = dolphinService.onEvent(DolphinEventType.PLAYBACK_STATUS, ({ instanceId, status }) => {
-      if (instanceId !== "playback") {
+      if (instanceId !== "playback" && instanceId !== ROOM_WATCH_INSTANCE_ID) {
         return;
       }
+      const run = instanceId === "playback" ? instanceId : `${instanceId}|${status.run ?? ""}`;
+      let asked = handled.get(run);
+      if (!asked) {
+        asked = new Set();
+        handled.set(run, asked);
+      }
       for (const ask of status.renderRequests ?? []) {
-        if (!ask || !Number.isFinite(ask.seq) || handled.has(ask.seq) || typeof ask.path !== "string") {
+        if (!ask || !Number.isFinite(ask.seq) || asked.has(ask.seq) || typeof ask.path !== "string") {
           continue;
         }
-        handled.add(ask.seq);
+        asked.add(ask.seq);
         void render(ask).catch(() => undefined);
       }
       // A finished render's folder button.
       const show = status.showRender;
-      if (show && Number.isFinite(show.seq) && show.seq > shownSeq) {
-        shownSeq = show.seq;
+      if (show && Number.isFinite(show.seq) && show.seq > (shownSeq.get(run) ?? 0)) {
+        shownSeq.set(run, show.seq);
         const output = tracked.get(show.id)?.job?.output;
         if (output) {
           window.electron.shell.showItemInFolder(output);
@@ -195,8 +205,8 @@ export const usePlaybackOverlay = () => {
         "instanceId" in event &&
         event.instanceId === "playback"
       ) {
-        handled = new Set();
-        shownSeq = 0;
+        handled.delete("playback");
+        shownSeq.delete("playback");
       }
     });
     return () => {
