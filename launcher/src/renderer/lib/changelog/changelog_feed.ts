@@ -4,6 +4,8 @@ import type { ChangelogPageQuery } from "@accounts/types";
 import log from "electron-log";
 import React from "react";
 
+import { useSettingsStore } from "@/lib/hooks/use_settings";
+
 import { changelogHtml } from "./changelog_html";
 
 /** Changelogs asked for at a time: the popup asks for more only while its end is in sight. */
@@ -15,15 +17,24 @@ export type ChangelogEntry = {
   html: string;
   publishedAt: string;
   everyStart: boolean;
+  /** EmissaryRecomp's patch notes for this release (`v0.7.2`); null for the launcher's. */
+  emissaryVersion: string | null;
 };
 
-export type FeedPage = { entries: ChangelogEntry[]; next: string | null };
+/** `emissary`: the feed has EmissaryRecomp's patch notes too (its next pages are asked for with them). */
+export type FeedPage = { entries: ChangelogEntry[]; next: string | null; emissary: boolean };
 
-export async function fetchFeedPage(query: ChangelogPageQuery): Promise<FeedPage> {
+/** Whether this launcher's feed has EmissaryRecomp's patch notes: Play plays with it. */
+export const wantsEmissaryNotes = () => useSettingsStore.getState().settings.playProjectPlusWith === "emissary";
+
+export async function fetchFeedPage(
+  query: Omit<ChangelogPageQuery, "emissary"> & { emissary?: boolean },
+): Promise<FeedPage> {
   const accounts = window.electron.accounts;
+  const { emissary = false, ...rest } = query;
   // The accounts server this launcher talks to (staging and local ones too): the pictures are there.
   const [page, urls] = await Promise.all([
-    accounts.changelogs({ limit: FEED_PAGE_SIZE, ...query }),
+    accounts.changelogs({ limit: FEED_PAGE_SIZE, ...rest, ...(emissary ? { emissary: 1 as const } : {}) }),
     accounts.getServiceUrls(),
   ]);
   return {
@@ -32,8 +43,10 @@ export async function fetchFeedPage(query: ChangelogPageQuery): Promise<FeedPage
       html: changelogHtml(c.html, urls.accountsApi),
       publishedAt: c.publishedAt,
       everyStart: c.everyStart === true,
+      emissaryVersion: c.product === "emissary" ? c.version ?? "" : null,
     })),
     next: page.next,
+    emissary,
   };
 }
 
@@ -54,7 +67,7 @@ export function useChangelogFeed(first: FeedPage) {
       return;
     }
     loading.current = true;
-    fetchFeedPage({ after: next })
+    fetchFeedPage({ after: next, emissary: first.emissary })
       .then((page) =>
         setFeed((f) => {
           if (f.first !== first) {

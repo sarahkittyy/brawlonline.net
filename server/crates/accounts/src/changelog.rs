@@ -10,6 +10,10 @@
 //!
 //! Every changelog stays in the table as the history. The launcher pages through it as a feed
 //! (`GET /v1/changelogs`); `GET /v1/changelogs/latest` is the newest alone, for older launchers.
+//!
+//! EmissaryRecomp's patch notes are changelogs too (`product` `emissary`, its release's `version`):
+//! the board publishes them once that release is live, and only launchers that play with it ask for
+//! them (`?emissary=1`), in the same feed.
 
 use std::path::Path;
 
@@ -102,6 +106,31 @@ pub async fn publish_at(
     every_start: bool,
     at: Option<DateTime<Utc>>,
 ) -> anyhow::Result<Published> {
+    publish_for(pool, media_dir, markdown, media, every_start, at, None).await
+}
+
+/// An EmissaryRecomp release's version as its patch notes name it: `v` and three numbers.
+pub fn valid_emissary_version(v: &str) -> bool {
+    let Some(rest) = v.strip_prefix('v') else { return false };
+    let parts: Vec<&str> = rest.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.len() <= 9 && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// [`publish_at`] for the launcher's (`emissary` None) or an EmissaryRecomp release's patch notes
+/// (`emissary` its version, `v0.7.2`). The every-start one is replaced per product.
+pub async fn publish_for(
+    pool: &PgPool,
+    media_dir: &Path,
+    markdown: &str,
+    media: &[MediaFile],
+    every_start: bool,
+    at: Option<DateTime<Utc>>,
+    emissary: Option<&str>,
+) -> anyhow::Result<Published> {
+    if let Some(v) = emissary {
+        anyhow::ensure!(valid_emissary_version(v), "--emissary {v:?}: not a release version like v0.7.2");
+    }
+    let product = if emissary.is_some() { PRODUCT_EMISSARY } else { PRODUCT_LAUNCHER };
     if let Some(at) = at {
         let now = Utc::now();
         anyhow::ensure!(at <= now + chrono::Duration::minutes(1), "--published-at {at} is in the future");
@@ -152,25 +181,32 @@ pub async fn publish_at(
 
     let mut tx = pool.begin().await?;
     if every_start {
-        sqlx::query("DELETE FROM changelogs WHERE every_start").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM changelogs WHERE every_start AND product = $1").bind(product).execute(&mut *tx).await?;
     }
     let (id, published_at): (i64, DateTime<Utc>) = sqlx::query_as(
-        "INSERT INTO changelogs (body_md, every_start, published_at) VALUES ($1, $2, COALESCE($3, now()))
+        "INSERT INTO changelogs (body_md, every_start, published_at, product, version)
+             VALUES ($1, $2, COALESCE($3, now()), $4, $5)
              RETURNING id, published_at",
     )
     .bind(&md)
     .bind(every_start)
     .bind(at)
+    .bind(product)
+    .bind(emissary)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(Published { id, published_at, written })
 }
 
-/// Removes the staging-only changelog (the board's "show on staging" turned off): the count removed.
+/// Removes the staging-only changelogs (the board's "show on staging" turned off): the count removed.
 pub async fn clear_every_start(pool: &PgPool) -> sqlx::Result<u64> {
     Ok(sqlx::query("DELETE FROM changelogs WHERE every_start").execute(pool).await?.rows_affected())
 }
+
+/// `changelogs.product`.
+pub const PRODUCT_LAUNCHER: &str = "launcher";
+pub const PRODUCT_EMISSARY: &str = "emissary";
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct ChangelogRow {
@@ -178,11 +214,15 @@ pub struct ChangelogRow {
     pub body_md: String,
     pub published_at: DateTime<Utc>,
     pub every_start: bool,
+    /// [`PRODUCT_LAUNCHER`] or [`PRODUCT_EMISSARY`].
+    pub product: String,
+    /// An Emissary one's release (`v0.7.2`).
+    pub version: Option<String>,
 }
 
 /// Every changelog, newest first.
 pub async fn list(pool: &PgPool) -> sqlx::Result<Vec<ChangelogRow>> {
-    sqlx::query_as("SELECT id, body_md, published_at, every_start FROM changelogs ORDER BY published_at DESC, id DESC")
+    sqlx::query_as("SELECT id, body_md, published_at, every_start, product, version FROM changelogs ORDER BY published_at DESC, id DESC")
         .fetch_all(pool)
         .await
 }
@@ -202,6 +242,16 @@ pub struct LatestChangelog {
     pub published_at: DateTime<Utc>,
     /// Staging's "show on staging": shown at every start, whatever the launcher showed before.
     pub every_start: bool,
+    /// `launcher` or `emissary` (EmissaryRecomp's patch notes; only with `?emissary=1`).
+    #[serde(default = "launcher_product")]
+    pub product: String,
+    /// An Emissary one's release (`v0.7.2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+fn launcher_product() -> String {
+    PRODUCT_LAUNCHER.into()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,10 +261,11 @@ pub struct LatestResp {
 
 /// `GET /v1/changelogs/latest` (public): the staging-only changelog if there is one, else the
 /// newest; `null` without any. Launchers ask once after an update (staging ones at every start).
+/// The launcher's only (older launchers know nothing of EmissaryRecomp's).
 pub async fn latest(State(state): State<AppState>) -> Response {
     let row = sqlx::query_as::<_, ChangelogRow>(
-        "SELECT id, body_md, published_at, every_start FROM changelogs \
-         ORDER BY every_start DESC, published_at DESC, id DESC LIMIT 1",
+        "SELECT id, body_md, published_at, every_start, product, version FROM changelogs \
+         WHERE product = 'launcher' ORDER BY every_start DESC, published_at DESC, id DESC LIMIT 1",
     )
     .fetch_optional(&state.pool)
     .await;
@@ -243,6 +294,9 @@ pub struct PageQuery {
     pub before: Option<String>,
     /// The `next` of the page before.
     pub after: Option<String>,
+    /// `1`: EmissaryRecomp's patch notes too (a launcher whose Play uses it). `before` does not
+    /// hold them back: they are published once their release is out.
+    pub emissary: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -269,6 +323,8 @@ fn shown(r: ChangelogRow) -> LatestChangelog {
         markdown: r.body_md,
         published_at: r.published_at,
         every_start: r.every_start,
+        product: r.product,
+        version: r.version,
     }
 }
 
@@ -289,27 +345,35 @@ pub async fn page(State(state): State<AppState>, Query(q): Query<PageQuery>) -> 
         ),
         None => None,
     };
+    let emissary = matches!(q.emissary.as_deref(), Some("1" | "true"));
+    // Emissary ones are left out of `before`: published once their release is out, whatever
+    // launcher reads them.
     let mut rows = match after {
         Some((at, id)) => {
             sqlx::query_as::<_, ChangelogRow>(
-                "SELECT id, body_md, published_at, every_start FROM changelogs \
+                "SELECT id, body_md, published_at, every_start, product, version FROM changelogs \
                  WHERE NOT every_start AND (published_at, id) < ($1, $2) \
+                   AND (product = 'launcher' OR ($4 AND product = 'emissary')) \
                  ORDER BY published_at DESC, id DESC LIMIT $3",
             )
             .bind(at)
             .bind(id)
             .bind(n + 1)
+            .bind(emissary)
             .fetch_all(&state.pool)
             .await
         }
         None => {
             sqlx::query_as::<_, ChangelogRow>(
-                "SELECT id, body_md, published_at, every_start FROM changelogs \
-                 WHERE NOT every_start AND ($1::timestamptz IS NULL OR published_at < $1) \
+                "SELECT id, body_md, published_at, every_start, product, version FROM changelogs \
+                 WHERE NOT every_start \
+                   AND ((product = 'launcher' AND ($1::timestamptz IS NULL OR published_at < $1)) \
+                        OR ($3 AND product = 'emissary')) \
                  ORDER BY published_at DESC, id DESC LIMIT $2",
             )
             .bind(before)
             .bind(n + 1)
+            .bind(emissary)
             .fetch_all(&state.pool)
             .await
         }
@@ -323,14 +387,17 @@ pub async fn page(State(state): State<AppState>, Query(q): Query<PageQuery>) -> 
     };
     let mut changelogs = Vec::with_capacity(rows.len() + 1);
     if after.is_none() {
-        let every: Option<ChangelogRow> = sqlx::query_as(
-            "SELECT id, body_md, published_at, every_start FROM changelogs WHERE every_start \
-             ORDER BY published_at DESC, id DESC LIMIT 1",
+        // Staging's every-start ones: the launcher's, and with `emissary` the recomp's.
+        let every: Vec<ChangelogRow> = sqlx::query_as(
+            "SELECT id, body_md, published_at, every_start, product, version FROM changelogs \
+             WHERE every_start AND (product = 'launcher' OR ($1 AND product = 'emissary')) \
+             ORDER BY published_at DESC, id DESC LIMIT 2",
         )
-        .fetch_optional(&state.pool)
+        .bind(emissary)
+        .fetch_all(&state.pool)
         .await
         .map_err(ApiError::internal)?;
-        changelogs.extend(every.map(shown));
+        changelogs.extend(every.into_iter().map(shown));
     }
     changelogs.extend(rows.into_iter().map(shown));
     Ok((
@@ -343,6 +410,14 @@ pub async fn page(State(state): State<AppState>, Query(q): Query<PageQuery>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emissary_versions() {
+        assert!(valid_emissary_version("v0.7.2"));
+        for bad in ["0.7.2", "v0.7", "v0.7.2-rc.1", "v0.x.2", ""] {
+            assert!(!valid_emissary_version(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn titles() {

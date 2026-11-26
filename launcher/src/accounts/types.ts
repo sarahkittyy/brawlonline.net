@@ -519,13 +519,20 @@ export type LatestChangelog = {
   publishedAt: string;
   /** Staging only (the agent board's "show on staging"): shown at every start of a test-mode launcher. */
   everyStart?: boolean;
+  /** `emissary`: EmissaryRecomp's patch notes (only asked for with `emissary`); absent from an older server. */
+  product?: "launcher" | "emissary";
+  /** An EmissaryRecomp one's release (`v0.7.2`). */
+  version?: string;
 };
 
 /** A page of the changelog feed (`GET /v1/changelogs`): newest first; `next` is the `after` of the page after. */
 export type ChangelogPage = { changelogs: LatestChangelog[]; next: string | null };
 
-/** `GET /v1/changelogs`: `before` (ISO) leaves out the ones published after it; ignored with `after`. */
-export type ChangelogPageQuery = { limit?: number; before?: string; after?: string };
+/**
+ * `GET /v1/changelogs`: `before` (ISO) leaves out the launcher's published after it; ignored with `after`. `emissary`:
+ * EmissaryRecomp's patch notes too (Play plays with it), whatever `before` says.
+ */
+export type ChangelogPageQuery = { limit?: number; before?: string; after?: string; emissary?: 1 };
 
 export interface AccountsApi {
   /** Creates the account, stores its session and returns the user. */

@@ -10,7 +10,7 @@ import { combine } from "zustand/middleware";
 import { ChangelogMessages as Messages } from "./changelog.messages";
 import { Feed } from "./changelog_dialog";
 import type { FeedPage } from "./changelog_feed";
-import { fetchFeedPage } from "./changelog_feed";
+import { fetchFeedPage, wantsEmissaryNotes } from "./changelog_feed";
 
 type Notify = { showError: (error: unknown) => void; showWarning: (message: string) => void };
 
@@ -22,7 +22,7 @@ export const useLatestChangelog = create(
         return;
       }
       set({ loading: true });
-      fetchFeedPage({})
+      fetchFeedPage({ emissary: wantsEmissaryNotes() })
         .then((first) => {
           if (first.entries.length === 0) {
             set({ loading: false });

@@ -13,6 +13,7 @@ import DialogContent from "@mui/material/DialogContent";
 import IconButton from "@mui/material/IconButton";
 import React from "react";
 
+import { AddonsSettingsMessages } from "@/pages/settings/addons_settings/addons_settings.messages";
 import { bodyFont, titleFont } from "@/styles/with_font";
 
 import { ChangelogMessages as Messages } from "./changelog.messages";
@@ -21,7 +22,7 @@ import type { ChangelogEntry } from "./changelog_feed";
 export type ChangelogDialogViewProps = {
   open: boolean;
   /** Newest first. */
-  entries: readonly Pick<ChangelogEntry, "id" | "html">[];
+  entries: readonly (Pick<ChangelogEntry, "id" | "html"> & Partial<Pick<ChangelogEntry, "emissaryVersion">>)[];
   /** There are older ones still to ask for. */
   hasMore: boolean;
   onLoadMore: () => void;
@@ -133,6 +134,11 @@ export const ChangelogDialogView = ({ open, entries, hasMore, onLoadMore, onClos
         {entries.map((e, i) => (
           <React.Fragment key={e.id}>
             {i > 0 && <Divider />}
+            {e.emissaryVersion != null && (
+              <EmissaryTag data-testid="changelog-emissary">
+                {`${AddonsSettingsMessages.playWithEmissaryOn()} ${e.emissaryVersion}`.trim()}
+              </EmissaryTag>
+            )}
             <Body dangerouslySetInnerHTML={{ __html: e.html }} data-testid="changelog-body" />
           </React.Fragment>
         ))}
@@ -140,6 +146,19 @@ export const ChangelogDialogView = ({ open, entries, hasMore, onLoadMore, onClos
     </Dialog>
   );
 };
+
+/** Over EmissaryRecomp's patch notes: whose they are, as the board's preview shows it. */
+const EmissaryTag = styled.div`
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.1);
+  font-family: ${bodyFont};
+  font-size: 12px;
+  line-height: 18px;
+  color: rgba(255, 255, 255, 0.8);
+`;
 
 /** Between two releases' changelogs. */
 const Divider = styled.hr`

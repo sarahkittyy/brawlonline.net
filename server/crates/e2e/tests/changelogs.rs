@@ -147,3 +147,58 @@ async fn changelogs_feed_pages() {
 
     let _ = std::fs::remove_dir_all(&media_dir);
 }
+
+/// EmissaryRecomp's patch notes (`pp-admin changelog publish --emissary v0.7.2`): in the feed only
+/// for a launcher that asks (`emissary=1`, its Play uses the recomp), with their product and
+/// version, between the launcher's by date, never held back by `before`; never in `/latest`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn emissary_changelogs_are_asked_for() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let media_dir = std::env::temp_dir().join(format!("pp-e2e-changelog-emissary-{}", std::process::id()));
+    let ids = |v: &serde_json::Value| -> Vec<i64> {
+        v["changelogs"].as_array().unwrap().iter().map(|c| c["id"].as_i64().unwrap()).collect()
+    };
+    let now = chrono::Utc::now();
+    let at = |mins: i64| Some(now - chrono::Duration::minutes(mins));
+    let err = |r: anyhow::Result<changelog::Published>| r.unwrap_err().to_string();
+    let l1 = changelog::publish_at(&s.pool, &media_dir, "# Launcher 0.2.10", &[], false, at(30)).await.unwrap();
+    let e1 = changelog::publish_for(&s.pool, &media_dir, "# Emissary", &[], false, at(20), Some("v0.7.2"))
+        .await
+        .unwrap();
+    let l2 = changelog::publish_at(&s.pool, &media_dir, "# Launcher 0.2.11", &[], false, at(10)).await.unwrap();
+    let e2 = changelog::publish_for(&s.pool, &media_dir, "# Emissary again", &[], false, None, Some("v0.7.3"))
+        .await
+        .unwrap();
+    assert!(err(changelog::publish_for(&s.pool, &media_dir, "x", &[], false, None, Some("0.7.3")).await)
+        .contains("v0.7.2"));
+
+    let (_, plain) = s.get("/v1/changelogs?limit=5", None).await;
+    assert_eq!(ids(&plain), vec![l2.id, l1.id], "{plain}");
+    assert_eq!(plain["changelogs"][0]["product"], "launcher");
+    assert!(plain["changelogs"][0].get("version").is_none(), "{plain}");
+    let (_, both) = s.get("/v1/changelogs?limit=2&emissary=1", None).await;
+    assert_eq!(ids(&both), vec![e2.id, l2.id], "{both}");
+    assert_eq!(both["changelogs"][0]["product"], "emissary");
+    assert_eq!(both["changelogs"][0]["version"], "v0.7.3");
+    let (_, more) = s.get(&format!("/v1/changelogs?limit=2&emissary=1&after={}", both["next"].as_str().unwrap()), None).await;
+    assert_eq!(ids(&more), vec![e1.id, l1.id], "{more}");
+    // A launcher built 15 minutes ago: the launcher's newer notes wait for their release; the
+    // recomp's are out already.
+    let built = (now - chrono::Duration::minutes(15)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let (_, b) = s.get(&format!("/v1/changelogs?limit=5&emissary=1&before={built}"), None).await;
+    assert_eq!(ids(&b), vec![e2.id, e1.id, l1.id], "{b}");
+    let (_, latest) = s.get("/v1/changelogs/latest", None).await;
+    assert_eq!(latest["changelog"]["id"].as_i64(), Some(l2.id), "{latest}");
+
+    // Staging's every-start ones, one per product.
+    let el = changelog::publish(&s.pool, &media_dir, "draft", &[], true).await.unwrap();
+    let ee = changelog::publish_for(&s.pool, &media_dir, "draft", &[], true, None, Some("v0.7.4")).await.unwrap();
+    let ee2 = changelog::publish_for(&s.pool, &media_dir, "draft 2", &[], true, None, Some("v0.7.4")).await.unwrap();
+    let (_, plain) = s.get("/v1/changelogs?limit=1", None).await;
+    assert_eq!(ids(&plain), vec![el.id, l2.id], "{plain}");
+    let (_, both) = s.get("/v1/changelogs?limit=1&emissary=1", None).await;
+    assert_eq!(ids(&both), vec![ee2.id, el.id, e2.id], "{both}");
+    assert!(!ids(&both).contains(&ee.id));
+
+    let _ = std::fs::remove_dir_all(&media_dir);
+}

@@ -33,6 +33,10 @@ pub enum ChangelogCmd {
         /// patch notes publishes after that push deployed this command, dated just before it.
         #[arg(long)]
         published_at: Option<String>,
+        /// EmissaryRecomp's patch notes for this release (`v0.7.2`), not the launcher's: the board
+        /// publishes them once the release is live; launchers that play with it show them.
+        #[arg(long)]
+        emissary: Option<String>,
     },
     /// Remove the --every-start one (staging's "show on staging" turned off).
     ClearEveryStart,
@@ -69,7 +73,7 @@ pub fn render() -> anyhow::Result<()> {
 
 pub async fn run(pool: &PgPool, actor: &str, cmd: ChangelogCmd) -> anyhow::Result<()> {
     match cmd {
-        ChangelogCmd::Publish { every_start, media_dir, published_at } => {
+        ChangelogCmd::Publish { every_start, media_dir, published_at, emissary } => {
             let at = published_at
                 .map(|s| {
                     chrono::DateTime::parse_from_rfc3339(s.trim())
@@ -88,18 +92,20 @@ pub async fn run(pool: &PgPool, actor: &str, cmd: ChangelogCmd) -> anyhow::Resul
                     Ok(MediaFile { name: m.name, data })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let p = changelog::publish_at(pool, &media_dir, &bundle.markdown, &media, every_start, at).await?;
+            let emissary = emissary.as_deref().map(str::trim);
+            let p = changelog::publish_for(pool, &media_dir, &bundle.markdown, &media, every_start, at, emissary).await?;
             let action = if every_start { "changelog.publish_every_start" } else { "changelog.publish" };
             store::audit(
                 pool,
                 actor,
                 action,
                 Some(&p.id.to_string()),
-                json!({ "media": media.len(), "written": p.written }),
+                json!({ "media": media.len(), "written": p.written, "emissary": emissary }),
             )
             .await?;
             println!(
-                "published changelog {} at {}{} ({} media file(s), {} new)",
+                "published {}changelog {} at {}{} ({} media file(s), {} new)",
+                emissary.map(|v| format!("EmissaryRecomp {v} ")).unwrap_or_default(),
                 p.id,
                 p.published_at.format("%Y-%m-%d %H:%M:%S UTC"),
                 if every_start { ", shown at every start" } else { "" },
@@ -115,10 +121,11 @@ pub async fn run(pool: &PgPool, actor: &str, cmd: ChangelogCmd) -> anyhow::Resul
             let rows = changelog::list(pool).await?;
             for r in &rows {
                 println!(
-                    "#{}  {}{}  {}",
+                    "#{}  {}{}{}  {}",
                     r.id,
                     r.published_at.format("%Y-%m-%d %H:%M UTC"),
                     if r.every_start { "  [every start]" } else { "" },
+                    r.version.as_deref().map(|v| format!("  [emissary {v}]")).unwrap_or_default(),
                     changelog::title_of(&r.body_md)
                 );
             }

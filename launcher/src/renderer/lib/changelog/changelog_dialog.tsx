@@ -5,6 +5,9 @@
 // notes still shows the last release's to a launcher that skipped it, and nothing to one that saw
 // them. Offline or a failed request: it asks again at the next start. A test-mode launcher (staging)
 // asks at every start and shows an every-start changelog (the agent board's "show on staging") each time.
+// With Play on EmissaryRecomp, its patch notes are in the same feed (wantsEmissaryNotes), and the feed
+// is asked for at every start: a recomp release comes without a launcher update. They are published
+// once their release is out, so the launcher's build time does not hold them back.
 import log from "electron-log";
 import React from "react";
 
@@ -12,7 +15,7 @@ import { useSettingsStore } from "@/lib/hooks/use_settings";
 
 import { ChangelogDialogView } from "./changelog_dialog_view";
 import type { FeedPage } from "./changelog_feed";
-import { fetchFeedPage, useChangelogFeed } from "./changelog_feed";
+import { fetchFeedPage, useChangelogFeed, wantsEmissaryNotes } from "./changelog_feed";
 import { isNewChangelog } from "./changelog_html";
 
 const markShown = (seenAt?: string) =>
@@ -34,19 +37,21 @@ export const ChangelogDialog = React.memo(function ChangelogDialog() {
   const [open, setOpen] = React.useState(false);
 
   React.useEffect(() => {
-    if (!pending && !testMode) {
+    const emissary = wantsEmissaryNotes();
+    if (!pending && !testMode && !emissary) {
       return;
     }
     let cancelled = false;
     // One published after this launcher was built is about a release still to come: left out.
-    fetchFeedPage({ before: __DATE__ })
+    fetchFeedPage({ before: __DATE__, emissary })
       .then((first) => {
         if (cancelled) {
           return;
         }
         const everyStart = testMode && first.entries[0]?.everyStart === true;
         const newest = first.entries.find((e) => !e.everyStart);
-        if (!everyStart && !pending) {
+        // Without a launcher update, only EmissaryRecomp's newest can be new.
+        if (!everyStart && !pending && newest?.emissaryVersion == null) {
           return;
         }
         if (!everyStart && !newest) {
@@ -55,8 +60,12 @@ export const ChangelogDialog = React.memo(function ChangelogDialog() {
           // before the push, so a launcher updated sooner still shows them at its next start.
           return;
         }
-        if (!everyStart && !isNewChangelog(newest!.publishedAt, seenAt, __DATE__)) {
-          void markShown();
+        // EmissaryRecomp's are published once their release is out: this launcher's build time doesn't count.
+        const builtAt = newest?.emissaryVersion != null ? "" : __DATE__;
+        if (!everyStart && !isNewChangelog(newest!.publishedAt, seenAt, builtAt)) {
+          if (pending) {
+            void markShown();
+          }
           return;
         }
         // Staging's every-start one comes back at the next start whatever is stored.
