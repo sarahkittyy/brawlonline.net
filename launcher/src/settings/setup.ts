@@ -116,6 +116,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await dolphinManager.sendInputDisplayToGame(inputDisplay);
   });
 
+  // Quick chat: a running game re-reads the file within a second.
+  settingsManager.onSettingChange("quickChat", async () => {
+    await dolphinManager.writeQuickChat();
+  });
+
   settingsManager.onSettingChange("disableChat", async (disableChat) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ disableChat });

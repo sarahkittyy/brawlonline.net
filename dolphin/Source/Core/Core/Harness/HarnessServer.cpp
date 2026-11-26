@@ -63,6 +63,7 @@
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/Host.h"
 #include "Core/NetPlayClient.h"
+#include "Common/Timer.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameBridge.h"
 #include "BrawlOnline/Online/GameSetup.h"
@@ -70,6 +71,7 @@
 #include "Core/Online/ModsRoom.h"
 #include "BrawlOnline/Online/OnlineClient.h"
 #include "BrawlOnline/Online/OnlineSession.h"
+#include "BrawlOnline/Online/QuickChat.h"
 #include "BrawlOnline/Online/RecentCodes.h"
 #include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/Spectate.h"
@@ -2326,6 +2328,9 @@ Result CmdChatUi(const Args& args)
     o["spectators_rows"] = num(f.spectators_rows);
     o["spectators_loaded"] = num(f.spectators_loaded);
     o["spectators_more"] = picojson::value(f.spectators_more);
+    o["quick_chat"] = num(f.quick_chat);
+    o["quick_chat_group"] = num(f.quick_chat_group);
+    o["quick_chat_rect"] = rect(f.quick_chat_rect);
     frames.emplace_back(std::move(o));
   }
   VideoCommon::OnlineChatUI::SetRecording(GetBool(args, "record", true));
@@ -2333,6 +2338,19 @@ Result CmdChatUi(const Args& args)
     VideoCommon::OnlineChatUI::Activate();
   Result r;
   r["frames"] = picojson::value(frames);
+  return r;
+}
+
+// Quick chat (Online/QuickChat.h): whether the D-pad is taken now, and the messages as read from
+// quick-chat.json.
+Result CmdQuickChat(const Args&)
+{
+  Result r;
+  r["usable"] = picojson::value(Online::QuickChat::Usable(Common::Timer::NowMs()));
+  picojson::array messages;
+  for (const std::string& m : Online::QuickChat::GetMessages())
+    messages.emplace_back(m);
+  r["messages"] = picojson::value(messages);
   return r;
 }
 
@@ -2510,6 +2528,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"chat_report", CmdChatReport},
       {"chat_leave", CmdChatLeave},
       {"chat_ui", CmdChatUi},
+      {"quick_chat", CmdQuickChat},
       {"input_display", CmdInputDisplay},
       {"osd_mouse", CmdOsdMouse},
       {"osd_messages", CmdOsdMessages},

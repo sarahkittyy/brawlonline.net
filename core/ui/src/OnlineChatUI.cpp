@@ -29,9 +29,11 @@
 #include "BrawlOnline/Config/OnlineSettings.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
+#include "BrawlOnline/Online/QuickChat.h"
 #include "BrawlOnline/Online/Rooms.h"
 #include "BrawlOnline/Online/SpectatorChat.h"
 #include "BrawlOnline/UI/Hooks.h"
+#include "BrawlOnline/UI/QuickChatUI.h"
 
 namespace VideoCommon::OnlineChatUI
 {
@@ -176,6 +178,8 @@ struct UiState
 
   std::string notice;
   u64 notice_until = 0;
+  // Quick chat's last send that failed, shown under its messages while they are open.
+  std::string quick_notice;
 
   // Spectator chat's Spectators window (a click on the eye).
   std::optional<Online::SpectatorChat::List> list;
@@ -1240,6 +1244,50 @@ std::vector<TestFrame> TakeRecordedFrames()
 namespace
 {
 void DisplayFrame(float scale);
+
+// Quick chat (Online/QuickChat.h): its menu over the CSS, in the player's colour; a message it
+// couldn't send says why, under its messages and in the window as a typed one would.
+void DrawQuickChat(float scale, float font_px, u64 now)
+{
+  Online::QuickChat::SetChatShown(!s.view->spectate, now);
+  auto result = Online::QuickChat::Result::None;
+  const Online::QuickChat::View qc = Online::QuickChat::Tick(now, &result);
+  switch (result)
+  {
+  case Online::QuickChat::Result::None:
+    break;
+  case Online::QuickChat::Result::Sent:
+    s.quick_notice.clear();
+    break;
+  case Online::QuickChat::Result::NoGroup:
+    s.quick_notice = "Not in a room or match.";
+    break;
+  case Online::QuickChat::Result::NoReaders:
+    s.quick_notice = "Nobody can read chat yet.";
+    break;
+  case Online::QuickChat::Result::TooFast:
+    s.quick_notice = "You're sending messages too fast.";
+    break;
+  }
+  if (!s.quick_notice.empty() && result != Online::QuickChat::Result::None)
+    SetNotice(s.quick_notice);
+  if (qc.state != Online::QuickChat::View::State::Open)
+    s.quick_notice.clear();
+  int color = 0;
+  for (const Online::Chat::Member& m : s.view->members)
+  {
+    if (m.is_me)
+      color = m.color;
+  }
+  const BrawlOnline::UI::QuickChatUI::Drawn drawn =
+      BrawlOnline::UI::QuickChatUI::Draw(qc, scale, font_px, ColorOf(color), s.quick_notice, now);
+  if (s_recording)
+  {
+    s_frame.quick_chat = drawn.shown ? static_cast<int>(qc.state) : 0;
+    s_frame.quick_chat_group = qc.group;
+    s_frame.quick_chat_rect = drawn.rect;
+  }
+}
 }
 
 void Display(float scale)
@@ -1291,6 +1339,7 @@ void DisplayFrame(float scale)
   const bool shown = s.view && s.view->active && !Config::Get(Config::ONLINE_DISABLE_CHAT);
   if (!shown)
   {
+    Online::QuickChat::SetChatShown(false, Common::Timer::NowMs());
     s_lines_shown = false;
     s_activate = false;
     StopTyping();
@@ -1309,6 +1358,7 @@ void DisplayFrame(float scale)
   // PushFont's size is before the style's scale (the backbuffer scale).
   const float main_scale = ImGui::GetStyle().FontScaleMain > 0 ? ImGui::GetStyle().FontScaleMain : 1.0f;
   ImGui::PushFont(s_font, font_px / main_scale);
+  DrawQuickChat(scale, font_px, now);
 
   // Folded or not as ImGui will draw it unless told otherwise: a click on the collapse arrow last
   // frame takes effect in this Begin. That is the player's: the chat key's opening ends.

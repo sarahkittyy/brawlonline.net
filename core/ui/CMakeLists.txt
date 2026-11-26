@@ -8,12 +8,14 @@ add_library(brawl_online_ui STATIC
   include/BrawlOnline/UI/InputDisplayUI.h
   include/BrawlOnline/UI/OnScreenDisplay.h
   include/BrawlOnline/UI/OnlineChatUI.h
+  include/BrawlOnline/UI/QuickChatUI.h
   include/BrawlOnline/UI/ReplayOverlayUI.h
   include/BrawlOnline/UI/Style.h
   src/Hooks.cpp
   src/InputDisplayUI.cpp
   src/OnScreenDisplay.cpp
   src/OnlineChatUI.cpp
+  src/QuickChatUI.cpp
   src/ReplayOverlayUI.cpp
   src/Style.cpp
 )

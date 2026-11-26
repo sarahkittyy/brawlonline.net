@@ -1,6 +1,7 @@
 import { INPUT_DELAY_NORMAL } from "@common/input_delay";
 import { DEFAULT_INPUT_DISPLAY } from "@common/input_display";
 import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
+import { EMPTY_QUICK_CHAT } from "@common/quick_chat";
 import { app } from "electron";
 import log from "electron-log";
 import fs from "fs";
@@ -47,6 +48,7 @@ export const defaultAppSettings: AppSettings = {
     inputDelay: INPUT_DELAY_NORMAL,
     enableMusic: true,
     disableChat: false,
+    quickChat: [...EMPTY_QUICK_CHAT],
     potatoMode: false,
     enableStreamGames: true,
     netplayNetwork: "",

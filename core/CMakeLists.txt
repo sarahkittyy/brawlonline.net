@@ -18,6 +18,7 @@ add_library(brawl_online_core STATIC
   include/BrawlOnline/Online/Matchmaking.h
   include/BrawlOnline/Online/OnlineClient.h
   include/BrawlOnline/Online/OnlineSession.h
+  include/BrawlOnline/Online/QuickChat.h
   include/BrawlOnline/Online/Ranked.h
   include/BrawlOnline/Online/RecentCodes.h
   include/BrawlOnline/Online/RoomMessages.h
@@ -48,6 +49,7 @@ add_library(brawl_online_core STATIC
   src/Online/Matchmaking.cpp
   src/Online/OnlineClient.cpp
   src/Online/OnlineSession.cpp
+  src/Online/QuickChat.cpp
   src/Online/Ranked.cpp
   src/Online/RecentCodes.cpp
   src/Online/RoomMessages.cpp

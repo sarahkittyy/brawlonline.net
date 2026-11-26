@@ -30,6 +30,7 @@
 #include "BrawlOnline/Online/GameAlive.h"
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/InputView.h"
+#include "BrawlOnline/Online/QuickChat.h"
 #include "BrawlOnline/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "BrawlOnline/Online/OnlineClient.h"
@@ -1846,6 +1847,7 @@ void Thread()
       PollJoinRequest();
       PollInputDelayRequest();
       InputView::PollLauncherFile(OnlineDir());
+      QuickChat::PollFile(OnlineDir());
       ModsRoom::Files(OnlineDir());
       // Room watch's clips: the kept games' files, the clips for the launcher (Online/RoomWatch.h).
       RoomWatch::Files(OnlineDir());

@@ -58,6 +58,10 @@ export interface SettingsSchema {
   // Dolphin.ini `[Online] DisableChat`.
   disableChat: boolean;
 
+  // Settings > Social > Quick Chat (common/quick_chat.ts): the 16 D-pad messages, group then direction,
+  // "" for none. Written to the netplay online folder's quick-chat.json, which a running game re-reads.
+  quickChat: string[];
+
   // "Potato mode": matches draw less (no shadows, no stage backgrounds) for a PC that can't hold
   // 60 fps; what each player's game simulates is unchanged, so it plays online against anyone
   // (docs/game-code.md, Potato mode). Synced to Dolphin.ini `[Online] PotatoMode`.

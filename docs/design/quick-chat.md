@@ -1,0 +1,34 @@
+# Quick chat: D-pad messages on the CSS (design)
+
+_2026-11-26. Sarah's board, card "dpad chat macros": "dpad up, down, left, right, all open a submenu, and that submenu opens up with up, down, left, right, so there's 16 possible pre-set messages you can send. we can fill them with some defaults in the future, but leave them blank for now. we'd need a really pretty, usable ui in settings > social to edit this ... you should also design how it looks in-game, where the dpad chat menu pops up on the css with the preview, like slippi's does. we also need to make sure it works for all the lengths of message we allow. we can also move "disable chat" to social, above this." Builds on the chat of `docs/design/chat.md` (quick chat was its §5 "not in scope")._
+
+## 1. Does the D-pad do anything on the CSS?
+
+Yes: **it moves the hand, as the stick does** (P+ 3.2.x, measured 2026-11-26 with the harness: D-pad Up from the P1 box took the hand up into the grid; left and right move it sideways; `muSelCharHand` +0x90/+0x94). Nothing else on the CSS reads it: no costume, team or tag change. Elsewhere it is ours or P+'s: the room's rules menu moves its pages with it (`docs/game-code.md`, rows of 7), the ping popup's cursor takes it or the stick, P+'s Code Menu is L + R + D-pad Down (closed online). So quick chat takes the D-pad from the hand only while it can be used (§3), and the stick still moves the hand.
+
+## 2. Decisions
+
+| # | Topic | Decision |
+|---|---|---|
+| 1 | Messages | **16, the player's own, all empty by default.** Message `4 * group + direction`, directions clockwise from up (Up, Right, Down, Left). Each is chat text: at most 100 characters and 300 bytes of UTF-8 (`ChatText`), cleaned as any chat line. |
+| 2 | Presses | **First press opens that direction's group, the second sends the message in its direction** (Up, Up sends the group's Up). A group with no message doesn't open; an empty slot sends nothing. **B closes** an open group (B is kept from the game until it is let go). An open group closes by itself 3 s after the last press. |
+| 3 | Sending | **As chat**: `Online::Chat::Send`, end-to-end encrypted to everyone in the room or match like a typed line; the others see an ordinary line from the player (ignore, report and mm's rate limit as for any line). A line refused ("You're sending messages too fast.", "Nobody can read chat yet.") is said under the group's messages and in the chat window, and the group stays open. |
+| 4 | Where | **The CSS of a room or of a Direct / Unranked / Ranked set** (LOCAL.screen Room or OnlineBusy on `scSelctCharacter`), not the room's rules menu, not the stage select, not matches (the D-pad is taunts). Only while the chat window is shown: in a chat group, Disable Chat off, not a spectator's chat. |
+| 5 | Controllers | **GameCube controllers**: Dolphin's mapped ones and the Wii U adapter's, and EmissaryRecomp's (the core's host pad read, `Gprb::ReadHostPad` outside a session). A sideways Wii Remote's D-pad is its stick and is never taken. |
+| 6 | Look in game | **The group's four messages around a D-pad, each on the side that sends it**, in the middle of the game's picture: Up above, Down below, Left to the left (right-aligned), Right to the right; the group's arm lit in the player's chat colour (their port colour, by joining order), a dash where a slot is empty. Text 35% larger than the chat's (it follows Options > text size), wrapped (Left and Right at about 10.5 text heights, Up and Down wider), so a 100-character message fits in four or five lines. A thin line along the bottom runs out as the group's 3 s pass. A sent message lights up on a pill of the player's colour, the others dim, and the menu fades out after a second. Drawn with the chat font (kana and kanji) on ImGui's foreground: it takes no clicks. No new words on screen. |
+| 7 | Settings | **Settings > Social**, first: **Disable Chat** (moved from Settings > Game, same words), then **Quick Chat**, an editor laid out as the game draws it: a D-pad in the middle whose arms pick the group (arrow keys on it pick as the D-pad would), the four messages around it in their directions, aligned as in game; each arm's four dots are its group's messages, lit when set. A field grows with its text, Enter ends it, the count (n/100) shows while typing or past 80. Saved half a second after the last key and on leaving a field; dimmed while chat is disabled. |
+| 8 | Storage | **The launcher's settings** (`quickChat`, 16 strings), written to `quick-chat.json` in the netplay User folder's `Online/` (`{"version": 1, "messages": [16 strings]}`) at every launch and on every change; a running game (Dolphin or EmissaryRecomp) re-reads it within a second. On this PC only, not the account (yet). |
+
+## 3. Code
+
+- `core/include/BrawlOnline/Online/QuickChat.h`, `core/src/Online/QuickChat.cpp`: the file (Rooms' file poll), whether it can be used (`SetOnCss` from GameBridge's frame end, `SetChatShown` from the chat window each frame), the pad filter (`FilterPad`, in `Gprb::ReadHostPad`'s read outside a session), and the presses (`Tick`, the chat window's frame).
+- `core/ui/src/QuickChatUI.cpp`: the menu; `OnlineChatUI::Display` draws it.
+- Launcher: `src/common/quick_chat.ts` (file, limits), `DolphinManager.writeQuickChat`, `pages/settings/social_settings/quick_chat_setting.tsx` (stories: `pages/Settings/SocialSettings`).
+- Tests: `UnitTests/Core/Online/QuickChatTest.cpp`; `harness/tests/test_quick_chat.py` (a room, the D-pad's presses end to end; `PPHARNESS_QUICK_CHAT_SHOTS` captures the menu); `src/common/quick_chat.test.ts`.
+- Harness: `quick_chat` (usable, the messages), `chat_ui` frames' `quick_chat` (0 none, 1 open, 2 sent), `quick_chat_group`, `quick_chat_rect`.
+
+## 4. Later
+
+- Default messages (Sarah: "we can fill them with some defaults in the future").
+- The messages on the account, so they follow the player to another PC.
+- The stage select and the results screen; Wii Remote with Nunchuk and Classic Controller D-pads.

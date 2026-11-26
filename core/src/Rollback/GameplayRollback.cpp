@@ -23,7 +23,9 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
+#include "Common/Timer.h"
 #include "Core/Core.h"
+#include "BrawlOnline/Online/QuickChat.h"
 #include "BrawlOnline/Rollback/GameplaySession.h"
 #include "Core/Rollback/InputTrace.h"
 #include "Core/Debugger/OSThread.h"
@@ -1162,7 +1164,10 @@ GCPadStatus ReadHostPad(Core::System& system, int chan, HostPadSource source)
   {
     if (chan >= 0 && chan < 4)
       h.instant[chan] = now;
-    return ReadHostPadNow(chan, source);
+    // Outside a session (the menus): quick chat may take the D-pad on the CSS (Online/QuickChat.h).
+    GCPadStatus status = ReadHostPadNow(chan, source);
+    Online::QuickChat::FilterPad(chan, &status.button, Common::Timer::NowMs());
+    return status;
   }
   h.source[chan] = source;
   if (const u32 gen = h.generation.load(std::memory_order_relaxed); gen != h.seen_generation)

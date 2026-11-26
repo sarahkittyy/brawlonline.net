@@ -26,8 +26,6 @@ export const GameSettingsMessages = {
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   enableMusic: () => "Music",
   enableMusicDescription: () => "Play the game's music in menus and matches.",
-  disableChat: () => "Disable Chat",
-  disableChatDescription: () => "Hide the chat window everywhere in the game.",
   potatoMode: () => "Potato Mode",
   potatoModeDescription: () => "Disables shadows and backgrounds.",
   enableStreamGames: () => "Show my games on the Spectate tab",

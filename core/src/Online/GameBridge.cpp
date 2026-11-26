@@ -30,6 +30,7 @@
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/GameSetup.h"
 #include "BrawlOnline/Online/InputView.h"
+#include "BrawlOnline/Online/QuickChat.h"
 #include "BrawlOnline/Online/Ipv6.h"
 #include "BrawlOnline/Online/MatchRules.h"
 #include "BrawlOnline/Online/OnlineClient.h"
@@ -2508,6 +2509,24 @@ bool DrawsForScreen()
   return s_draws_for_screen.load(std::memory_order_relaxed);
 }
 
+// Quick chat works on the CSS of a room or of a Direct / Unranked / Ranked set, not on the room's
+// rules menu (its pages are moved with the D-pad): muSelCharTask (the CSS scene's +0x400) +0x630
+// is not 0 while that menu is open (game-code room_play.cpp TASK_RULES_OPEN).
+static bool QuickChatCss(const Core::CPUThreadGuard& guard)
+{
+  const Rooms::Screen screen = Rooms::GetScreen();
+  if (screen != Rooms::Screen::Room && screen != Rooms::Screen::OnlineBusy)
+    return false;
+  const Gprb::Guest g(guard.GetSystem().GetMemory());
+  if (Gprb::CurrentSceneName(g) != "scSelctCharacter")
+    return false;
+  const auto manager = g.Ptr32(Gprb::Addr::SCENE_MANAGER_PTR);
+  const auto scene = manager ? g.Ptr32(*manager + 4) : std::nullopt;
+  const auto task = scene ? g.Ptr32(*scene + 0x400) : std::nullopt;
+  const auto rules_open = task ? g.U32(*task + 0x630) : std::nullopt;
+  return rules_open && *rules_open == 0;
+}
+
 void OnFrameEnd(const Core::CPUThreadGuard& guard)
 {
   // The input display (a session's countdown comes here too: its ports then).
@@ -2572,6 +2591,10 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
   if (frame % 30 == 0)
     Rooms::SetScene(Gprb::CurrentSceneName(Gprb::Guest(guard.GetSystem().GetMemory())));
 
+  // Quick chat's CSS (Online/QuickChat.h): a room's or a set's CSS with the rules menu closed.
+  if (frame % 4 == 0)
+    QuickChat::SetOnCss(QuickChatCss(guard));
+
   // Never during a netplay session: what Dolphin would answer differs between the machines.
   const bool netplay = NetPlay::IsNetPlayRunning();
   {
@@ -2592,6 +2615,7 @@ void OnFrameEnd(const Core::CPUThreadGuard& guard)
 void Reset()
 {
   InputView::Reset();
+  QuickChat::SetOnCss(false);
   s_draws_for_window.store(false, std::memory_order_relaxed);
   s_draws_for_screen.store(false, std::memory_order_relaxed);
   // Start watching for user.json at boot, as Slippi does when its EXI device is created: the

@@ -1,6 +1,7 @@
 import { normalizeInputDelay } from "@common/input_delay";
 import type { InputDisplaySettings } from "@common/input_display";
 import { normalizeInputDisplay } from "@common/input_display";
+import { normalizeQuickChat } from "@common/quick_chat";
 import { DolphinLaunchType } from "@dolphin/types";
 import { Mutex } from "async-mutex";
 import electronSettings from "electron-settings";
@@ -139,6 +140,10 @@ export class SettingsManager extends EventEmitter {
 
   getEnableMusic(): boolean {
     return this.get().settings.enableMusic;
+  }
+
+  getQuickChat(): string[] {
+    return normalizeQuickChat(this.get().settings.quickChat);
   }
 
   getDisableChat(): boolean {

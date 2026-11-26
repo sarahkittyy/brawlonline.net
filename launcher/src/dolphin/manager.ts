@@ -5,6 +5,7 @@ import { INPUT_DISPLAY_REQUEST_FILE } from "@common/input_display";
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PPLUS_OFFLINE_LAUNCHER_DOL, PRODUCT_NAME } from "@common/product";
+import { QUICK_CHAT_FILE, quickChatFileText } from "@common/quick_chat";
 import { readTestMode } from "@common/test_mode";
 import { readReplayHeader } from "@replays/replay_format";
 import { defaultAppSettings } from "@settings/default_settings";
@@ -446,6 +447,19 @@ export class DolphinManager {
         await rename(tmp, file);
       }),
     );
+  }
+
+  /**
+   * Quick chat's messages (common/quick_chat.ts) for the game: quick-chat.json in the netplay online
+   * folder, which Play's game and EmissaryRecomp read, and re-read when it changes while they run.
+   */
+  async writeQuickChat(): Promise<void> {
+    const dir = this.netplayOnlineDir();
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, QUICK_CHAT_FILE);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(tmp, quickChatFileText(this.settingsManager.getQuickChat()));
+    await rename(tmp, file);
   }
 
   /** The netplay User folder (its `Config` has the controller settings). */
@@ -2241,6 +2255,9 @@ export class DolphinManager {
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
       // A change the last Dolphin never took is in Dolphin.ini now.
       await clearInputDelayRequest(this.netplayOnlineDir());
+    }
+    if (launchType === DolphinLaunchType.NETPLAY) {
+      await this.writeQuickChat();
     }
   }
 

@@ -49,6 +49,6 @@ Drawing uses `ImGui::TextUnformatted` only (never a printf-style call with peer 
 
 ## 5. Not in scope
 
-- Quick chat (Slippi's D-pad messages): still a candidate for controller-only players.
+- Quick chat (Slippi's D-pad messages): built 2026-11-26 on top of this chat, `docs/design/quick-chat.md`.
 - Friends lists. (The launcher has its own DMs with everyone online since 2026-10-10: `docs/social-protocol.md`. They share this chat's identity key and ignore list.)
 - Moderation UI: reports are stored and listed by `admin chat-reports`.
