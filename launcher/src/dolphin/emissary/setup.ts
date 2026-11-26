@@ -10,14 +10,17 @@ import electronLog from "electron-log";
 import path from "path";
 
 import type { DolphinManager } from "../manager";
+import { readGameStatus } from "../room_handoff";
 import { EMISSARY_FOLDER, EmissaryCancelled, EmissaryRecomp, localReleasesFetch } from "./emissary";
 import {
   ipc_emissaryCancel,
   ipc_emissaryGetState,
   ipc_emissaryInstall,
+  ipc_emissaryRelaunch,
   ipc_emissaryRemove,
   ipc_emissaryState,
 } from "./ipc";
+import { EmissaryUpdateWatch, UPDATE_WATCH_MS } from "./update_watch";
 
 const log = electronLog.scope("dolphin/emissary");
 
@@ -146,6 +149,36 @@ export default function setupEmissaryIpc({
     void autoUpdate();
     setInterval(() => void autoUpdate(), AUTO_UPDATE_PLAYING_MS).unref();
   }, AUTO_UPDATE_FIRST_MS).unref();
+
+  // The server's word while the game runs (update_watch.ts): a release the game heard of is looked
+  // for at once (downloaded with "Update automatically"), and the game's Update Now closes it and
+  // starts the new version.
+  const watch = new EmissaryUpdateWatch({
+    running: () => dolphinManager.isEmissaryRunning(),
+    status: async () => {
+      const read = await readGameStatus(dolphinManager.netplayOnlineDir());
+      return read.kind === "missing" ? null : read.status;
+    },
+    state: (refresh) => emissary().state({ refresh }),
+    install: () => emissary().install(),
+    autoUpdate: () => settingsManager.get().settings.emissaryAutoUpdate,
+    closeForUpdate: () => dolphinManager.closeEmissaryForUpdate(),
+    relaunch: () => void ipc_emissaryRelaunch.main!.trigger({}).catch(log.error),
+    log: (message) => log.warn(message),
+  });
+  let watching = false;
+  setInterval(() => {
+    if (watching) {
+      return;
+    }
+    watching = true;
+    void watch
+      .tick()
+      .catch((err) => log.warn(`EmissaryRecomp update watch: ${err}`))
+      .finally(() => {
+        watching = false;
+      });
+  }, UPDATE_WATCH_MS).unref();
 
   return emissary;
 }

@@ -18,3 +18,6 @@ export const ipc_emissaryRemove = makeEndpoint.main("emissary_remove", <EmptyPay
 // Events
 
 export const ipc_emissaryState = makeEndpoint.renderer("emissary_state", <EmissaryState>_);
+
+/** Update Now closed the game (update_watch.ts): the renderer's Play starts the new version. */
+export const ipc_emissaryRelaunch = makeEndpoint.renderer("emissary_relaunch", <EmptyPayload>_);

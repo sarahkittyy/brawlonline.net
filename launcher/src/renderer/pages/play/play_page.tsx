@@ -7,6 +7,7 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { useMutation } from "@tanstack/react-query";
 import React from "react";
+import { useNavigate } from "react-router-dom";
 
 import { PlayButtonMessages } from "@/app/header/play_button/play_button.messages";
 import { ProfileMessages } from "@/components/profile/profile.messages";
@@ -14,15 +15,18 @@ import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { RankBadgeMessages } from "@/components/rank_badge/rank_badge.messages";
 import { Sparkline } from "@/components/sparkline/sparkline";
 import { usePlay } from "@/lib/dolphin/use_play";
+import { useEmissary } from "@/lib/emissary/use_emissary";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useRatingHistory } from "@/lib/hooks/use_rating_history";
-import { useEnableRankDisplay, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
+import { useEnableRankDisplay, useLaunchGameOnPlay, usePlayProjectPlusWith } from "@/lib/hooks/use_settings";
 import { formatPosition, formatProfileRating } from "@/lib/ranked_format";
 import { useRoomList } from "@/lib/social/use_room_list";
 import { PublicRooms } from "@/pages/home/overview/public_rooms/public_rooms";
 import { PublicRoomsMessages } from "@/pages/home/overview/public_rooms/public_rooms.messages";
 import { PlayButtons } from "@/pages/home/play_buttons/play_buttons";
 import { ProjectPunchButton } from "@/pages/home/project_punch_button/project_punch_button";
+import { AddonsSettingsMessages } from "@/pages/settings/addons_settings/addons_settings.messages";
+import { ADDONS_SETTINGS_PATH } from "@/pages/settings/addons_settings/paths";
 import { GameSettingsMessages } from "@/pages/settings/game_settings/game_settings.messages";
 import { useServices } from "@/services";
 import type { RankedProfile } from "@/services/backend/types";
@@ -49,7 +53,10 @@ export const PlayPage = React.memo(function PlayPage() {
           </span>
         )}
         <span className={styles.grow} />
-        <LaunchButton />
+        <span className={styles.launchSlot}>
+          <LaunchButton />
+          <EmissaryVersion />
+        </span>
         <ProjectPunchButton />
       </div>
       {/* The Play buttons on the left, the player's rank on the right (Sarah's board). */}
@@ -78,6 +85,31 @@ const LaunchButton = () => {
     >
       {launchGame ? GameSettingsMessages.launchMelee(GAME_NAME) : GameSettingsMessages.launchDolphin()}
     </Button>
+  );
+};
+
+/**
+ * Under the launch button while Play plays with EmissaryRecomp (Sarah's board): its version, and the one it updates to
+ * while a newer one is out or downloaded ("Emissary v0.7.1 → v0.7.2"). Opens Settings > Add-ons.
+ */
+const EmissaryVersion = () => {
+  const [playWith] = usePlayProjectPlusWith();
+  const state = useEmissary((s) => s.state);
+  const navigate = useNavigate();
+  const installed = state?.installed?.version;
+  if (playWith !== "emissary" || !installed) {
+    return null;
+  }
+  const next = state.staged ?? (!state.upToDate && state.latest ? state.latest.version : null);
+  return (
+    <button
+      type="button"
+      className={styles.emissaryVersion}
+      onClick={() => navigate(ADDONS_SETTINGS_PATH)}
+      data-testid="emissary-version"
+    >
+      {`${AddonsSettingsMessages.playWithEmissaryOn()} ${installed}${next && next !== installed ? ` → ${next}` : ""}`}
+    </button>
   );
 };
 

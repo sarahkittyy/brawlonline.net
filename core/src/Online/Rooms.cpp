@@ -175,6 +175,11 @@ struct State
   // room-error, which would be shown.
   bool mm_game_alive = false;
   std::string conn_uid;
+  // mm's emissary-update: the newer release, and when Update Now was pressed (ISO time, empty
+  // before), both in game-status.json for the launcher. `status_busy`: game-status's last state.
+  std::string emissary_update;
+  std::string update_requested;
+  bool status_busy = false;
   u64 connects = 0, hellos = 0, drops = 0, sent = 0, received = 0, invalid = 0;
 
   // The room.
@@ -663,6 +668,11 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
   case Message::Kind::CreateTicketResp:
     Log(fmt::format("create-ticket-resp on the online connection: {}", m.error));
     return;
+  case Message::Kind::EmissaryUpdate:
+    if (m.version != s.emissary_update)
+      Log(fmt::format("emissary-update {}", m.version));
+    s.emissary_update = m.version;
+    return;
   case Message::Kind::TwosOff:
     // Another player of this 2v2 match could not connect to someone and searches again: its
     // session ends here too, to search again (Gprb::Session::TwosMatchOff).
@@ -1145,6 +1155,17 @@ void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
     delay["current"] = current >= 0 ? picojson::value(static_cast<double>(current)) : picojson::value();
     delay["request"] = s.delay_request.empty() ? picojson::value() : picojson::value(s.delay_request);
     o["inputDelay"] = picojson::value(delay);
+    // EmissaryRecomp only (mm tells no other engine): the release to update to, and when the
+    // player pressed Update Now in game (null before).
+    s.status_busy = is_busy;
+    if (!s.emissary_update.empty())
+    {
+      picojson::object update;
+      update["version"] = picojson::value(s.emissary_update);
+      update["requested"] = s.update_requested.empty() ? picojson::value() :
+                                                         picojson::value(s.update_requested);
+      o["emissaryUpdate"] = picojson::value(update);
+    }
     {
       std::lock_guard alk(s_activity_mutex);
       o["scene"] = s_scene.empty() ? picojson::value() : picojson::value(s_scene);
@@ -2129,6 +2150,21 @@ Screen GetScreen()
   return static_cast<Screen>(s.screen);
 }
 
+EmissaryUpdate GetEmissaryUpdate()
+{
+  std::lock_guard lk(s_mutex);
+  return {s.emissary_update, s.status_busy, !s.update_requested.empty()};
+}
+
+void RequestEmissaryUpdate()
+{
+  std::lock_guard lk(s_mutex);
+  if (s.emissary_update.empty())
+    return;
+  s.update_requested = IsoUtcNow();
+  Log(fmt::format("Update Now ({})", s.emissary_update));
+}
+
 picojson::object Status()
 {
   std::lock_guard lk(s_mutex);
@@ -2138,6 +2174,7 @@ picojson::object Status()
   o["watch"] = picojson::value(RoomWatch::Status());
   o["connection"] = picojson::value(ConnName(s.conn));
   o["connection_error"] = picojson::value(s.conn_error);
+  o["emissary_update"] = picojson::value(s.emissary_update);
   o["connection_hold"] = picojson::value(s.conn_hold);
   o["attempts"] = picojson::value(static_cast<double>(s.attempts));
   o["connects"] = picojson::value(static_cast<double>(s.connects));
@@ -2398,10 +2435,18 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
     s.harness_screen = false;
     return std::nullopt;
   }
+  else if (op == "emissary_update")
+  {
+    // Stands in for mm's emissary-update (mm tells only EmissaryRecomp): `version` ("" clears it).
+    std::lock_guard lk(s_mutex);
+    s.emissary_update = str("version");
+    s.update_requested.clear();
+    return std::nullopt;
+  }
   else
   {
     return "op must be create, join, leave, slot, teams, public, team, ready, sit_out, "
-           "watch_leave, release_lock, screen or release_screen";
+           "watch_leave, release_lock, screen, release_screen or emissary_update";
   }
   Submit(r);
   return std::nullopt;

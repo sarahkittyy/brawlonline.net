@@ -50,6 +50,33 @@
   white-space: nowrap;
 }
 
+/* The launch button and, under it without moving the row, EmissaryRecomp's version. */
+.launchSlot {
+  position: relative;
+  display: inline-flex;
+}
+
+.emissaryVersion {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.emissaryVersion:hover {
+  color: var(--text-primary);
+}
+
 /* The ranked card and the three Play buttons, one panel. */
 .panel {
   display: flex;

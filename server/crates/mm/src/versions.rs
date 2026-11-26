@@ -78,6 +78,26 @@ pub fn emissary_manifest_version(manifest: &serde_json::Value) -> Option<String>
     valid.then(|| v.to_string())
 }
 
+/// A recomp release's own version (`manifest.json`'s `version`, its tag: `v0.7.1`), told to a
+/// running recomp older than it (`emissary-update`, the game's "Update Available"). None when it
+/// is not `v` and three numbers.
+pub fn emissary_release_tag(manifest: &serde_json::Value) -> Option<String> {
+    let v = manifest.get("version")?.as_str()?.trim();
+    let parts: Vec<&str> = v.strip_prefix('v')?.split('.').collect();
+    let valid = parts.len() == 3
+        && parts.iter().all(|p| !p.is_empty() && p.len() <= 9 && p.bytes().all(|b| b.is_ascii_digit()));
+    valid.then(|| v.to_string())
+}
+
+/// What mm read of the recomp's latest release.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EmissaryRelease {
+    /// Its core's Brawl Online release per platform with a download ([`emissary_manifest_version`]).
+    pub platforms: Vec<(&'static str, String)>,
+    /// Its own version ([`emissary_release_tag`]); None from a manifest without one.
+    pub tag: Option<String>,
+}
+
 /// The version each platform's feed names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeedVersions {
@@ -283,6 +303,10 @@ mod tests {
 
         let manifest = serde_json::json!({"version": "v0.7.0", "brawlOnline": "0.2.9", "protocol": 1});
         assert_eq!(emissary_manifest_version(&manifest).as_deref(), Some("0.2.9"));
+        assert_eq!(emissary_release_tag(&serde_json::json!({"version": " v0.7.1 "})).as_deref(), Some("v0.7.1"));
+        for bad in ["0.7.1", "v0.7", "v0.7.1-rc.1", "v0.7.x", ""] {
+            assert_eq!(emissary_release_tag(&serde_json::json!({"version": bad})), None, "{bad}");
+        }
         for bad in [
             serde_json::json!({"brawlOnline": "0.2"}),
             serde_json::json!({"brawlOnline": "latest"}),

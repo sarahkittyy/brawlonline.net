@@ -121,6 +121,20 @@ Snapshot GetSnapshot();
 // The screen the game reports (LOCAL.screen, Screen), for the chat window: Match while a match runs.
 Screen GetScreen();
 
+// EmissaryRecomp's update (mm's `emissary-update`, docs/design/brawl-recompiled.md §16): the
+// latest release's version while this recomp is older (empty otherwise), whether the game is busy
+// (a match, a search, a set: what game-status.json calls busy), and whether Update Now was pressed.
+struct EmissaryUpdate
+{
+  std::string version;
+  bool busy = false;
+  bool requested = false;
+};
+EmissaryUpdate GetEmissaryUpdate();
+// Update Now: game-status.json's `emissaryUpdate.requested` says when; the launcher downloads the
+// release (if it has not yet), closes the game while it is idle and starts the new one.
+void RequestEmissaryUpdate();
+
 // Harness (`rooms_status`, `rooms_request`).
 picojson::object Status();
 // Tests without the game plugin: the ops a game would send, plus `ready` (with character and

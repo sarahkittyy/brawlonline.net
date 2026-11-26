@@ -257,6 +257,16 @@ pub fn update_to(latest: &str) -> String {
     format!("Close Dolphin and update to {latest}")
 }
 
+/// [`update_to`] for EmissaryRecomp: its own name, and its release's version (`v0.7.2`), not the
+/// core's Brawl Online version, which the player never sees for it. Without the version while mm
+/// has not read the release.
+pub fn update_emissary_to(tag: Option<&str>) -> String {
+    match tag {
+        Some(tag) => format!("Close Emissary and update to {tag}"),
+        None => "Close Emissary and update".into(),
+    }
+}
+
 /// A Direct ticket whose opponent did not search within its time.
 pub fn did_not_connect(code: &str) -> String {
     format!("{code} didn't connect in time.")

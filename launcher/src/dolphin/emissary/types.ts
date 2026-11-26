@@ -119,4 +119,6 @@ export interface EmissaryService {
   cancel(): Promise<void>;
   remove(): Promise<void>;
   onState(handle: (state: EmissaryState) => void): () => void;
+  /** Update Now closed the game for its update (update_watch.ts): Play again. */
+  onRelaunch(handle: () => void): () => void;
 }

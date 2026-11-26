@@ -2,7 +2,8 @@
 // can't play yet (use_play.ts, emissaryNeedsSetUp). Its Play button, once it is installed, goes on with what opened it
 // (the room, invite, Create room or queue; else Play).
 import { EMISSARY_REPO_URL } from "@dolphin/emissary/types";
-import React, { useEffect, useState } from "react";
+import log from "electron-log";
+import React, { useEffect, useRef, useState } from "react";
 
 import { usePlay } from "@/lib/dolphin/use_play";
 
@@ -19,6 +20,18 @@ export const EmissaryDialog = React.memo(function EmissaryDialog() {
 
   // Its state from the start: Play reads it, and the way to Add-ons glows by it (use_emissary_hint.ts).
   useEffect(() => watchEmissary(), []);
+
+  // The game's Update Now closed it (dolphin/emissary/update_watch.ts): Play starts the new version.
+  const playRef = useRef(play);
+  playRef.current = play;
+  useEffect(() => {
+    if (!window.electron?.emissary?.onRelaunch) {
+      return;
+    }
+    return window.electron.emissary.onRelaunch(() => {
+      void playRef.current({ bootGame: true }).catch(log.warn);
+    });
+  }, []);
 
   const onPlay = async () => {
     setStarting(true);

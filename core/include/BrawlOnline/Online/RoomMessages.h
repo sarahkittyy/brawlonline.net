@@ -235,6 +235,7 @@ struct Message
     RulesetList,       // the player's rulesets to offer (room-rulesets)
     RoomUnreachable,   // pairs of the room's game that could not connect to each other
     TwosOff,           // a 2v2 match is off: another player's connect failed (`match_id`)
+    EmissaryUpdate,    // this EmissaryRecomp is older than its latest release (`version`)
   };
   Kind kind = Kind::Unknown;
   std::string type;
@@ -246,6 +247,7 @@ struct Message
   std::string code;        // RoomLeft / RoomStart
   std::string reason;      // RoomLeft
   std::string match_id;    // RoomStart / RoomUnreachable / TwosOff
+  std::string version;     // EmissaryUpdate: the release's tag (`v0.7.2`)
   int timeout_secs = 15;   // RoomStart
   // RoomStart: the slots (1-4) that play the game (empty from an older mm: every member), its host
   // (the session's decider, 0: the room's) and its stage pickers (bits; nullopt: this machine's).

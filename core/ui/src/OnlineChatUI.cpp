@@ -27,6 +27,7 @@
 #include "Common/Config/Config.h"
 #include "Common/Timer.h"
 #include "BrawlOnline/Config/OnlineSettings.h"
+#include "BrawlOnline/Engine.h"
 #include "BrawlOnline/Online/Chat.h"
 #include "BrawlOnline/Online/ChatText.h"
 #include "BrawlOnline/Online/QuickChat.h"
@@ -1334,8 +1335,95 @@ void DrawQuickChat(float scale, float font_px, u64 now)
 }
 }
 
+namespace
+{
+// "v0.7.1" from the engine's version ("0.7.1", "v0.7.1+771c27b"); empty when it is no version (our
+// Dolphin's is a commit).
+std::string ShownVersion(std::string v)
+{
+  v = v.substr(0, v.find_first_of("+ "));
+  if (!v.empty() && v[0] == 'v')
+    v.erase(v.begin());
+  const bool version = !v.empty() && std::isdigit(static_cast<unsigned char>(v[0])) &&
+                       std::ranges::count(v, '.') == 2 &&
+                       std::ranges::all_of(v, [](char c) { return std::isdigit(static_cast<unsigned char>(c)) || c == '.'; });
+  return version ? "v" + v : std::string();
+}
+
+// EmissaryRecomp's "Update Available" (Online::Rooms::GetEmissaryUpdate, mm's emissary-update;
+// docs/design/brawl-recompiled.md §16): a small box in the bottom-right corner of the picture,
+// "Update Available" / "v0.7.1 → v0.7.2" / Update Now, and an X that hides it until a newer
+// release. Only while the game isn't busy (never in a match, a search or a set); Update Now asks
+// the launcher (game-status.json), which closes the game and starts the new version.
+std::string s_update_dismissed;
+
+void DrawEmissaryUpdate(float scale)
+{
+  const Online::Rooms::EmissaryUpdate update = Online::Rooms::GetEmissaryUpdate();
+  if (update.version.empty() || update.busy || update.version == s_update_dismissed || !s_font)
+    return;
+  const ImGuiIO& io = ImGui::GetIO();
+  const float font_px = FontPx(io.DisplaySize.y, scale) * TextSizePercent() / 100.0f;
+  const float main_scale = ImGui::GetStyle().FontScaleMain > 0 ? ImGui::GetStyle().FontScaleMain : 1.0f;
+  ImGui::PushFont(s_font, font_px / main_scale);
+  const auto& game_rect = BrawlOnline::UI::GetHooks().game_rect;
+  BrawlOnline::UI::Rect r = game_rect ? game_rect() : BrawlOnline::UI::Rect{};
+  if (r.right <= r.left || r.bottom <= r.top)
+    r = {0, 0, static_cast<int>(io.DisplaySize.x), static_cast<int>(io.DisplaySize.y)};
+  const float margin = 12.0f * scale;
+  ImGui::SetNextWindowPos(ImVec2(r.right - margin, r.bottom - margin), ImGuiCond_Always,
+                          ImVec2(1.0f, 1.0f));
+  ImGui::SetNextWindowBgAlpha(0.92f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.8f * font_px, 0.6f * font_px));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.35f * font_px);
+  constexpr ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
+      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar;
+  if (ImGui::Begin("###EmissaryUpdate", nullptr, flags))
+  {
+    const char* arrow = s_font->IsGlyphInFont(0x2192) ? " → " : " -> ";
+    const std::string from = ShownVersion(BrawlOnline::ThisEngine().version);
+    const std::string versions =
+        from.empty() ? update.version : fmt::format("{}{}{}", from, arrow, update.version);
+    const float x_size = ImGui::GetTextLineHeight();
+    ImGui::TextUnformatted("Update Available");
+    // The X at the right of the first line.
+    const float right = std::max(ImGui::CalcTextSize(versions.c_str()).x,
+                                 ImGui::CalcTextSize("Update Available").x + x_size * 1.6f);
+    ImGui::SameLine(ImGui::GetStyle().WindowPadding.x + right - x_size);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    if (ImGui::InvisibleButton("##dismiss", ImVec2(x_size, x_size)))
+      s_update_dismissed = update.version;
+    const ImU32 x_col = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+    const float pad = x_size * 0.28f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddLine(ImVec2(p.x + pad, p.y + pad), ImVec2(p.x + x_size - pad, p.y + x_size - pad), x_col,
+                1.5f * scale);
+    dl->AddLine(ImVec2(p.x + x_size - pad, p.y + pad), ImVec2(p.x + pad, p.y + x_size - pad), x_col,
+                1.5f * scale);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted(versions.c_str());
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 0.15f * font_px));
+    ImGui::BeginDisabled(update.requested);
+    if (ImGui::Button(update.requested ? "Updating###UpdateNow" : "Update Now###UpdateNow",
+                      ImVec2(right, 0)))
+    {
+      Online::Rooms::RequestEmissaryUpdate();
+    }
+    ImGui::EndDisabled();
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+  ImGui::PopFont();
+}
+}  // namespace
+
 void Display(float scale)
 {
+  DrawEmissaryUpdate(scale);
   if (!s_recording)
   {
     DisplayFrame(scale);

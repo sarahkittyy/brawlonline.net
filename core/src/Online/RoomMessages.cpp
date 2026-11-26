@@ -625,6 +625,18 @@ Message Parse(const std::string& packet)
       return invalid(m.why);
     m.kind = Message::Kind::RoomState;
   }
+  else if (m.type == "emissary-update")
+  {
+    // mm's EMISSARY_UPDATE: shown in the game and given to the launcher, so only `v` and numbers.
+    const std::string v = Str(o, "version", 32).value_or("");
+    const bool valid = v.size() >= 2 && v[0] == 'v' &&
+                       std::all_of(v.begin() + 1, v.end(),
+                                   [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
+    if (!valid)
+      return invalid("emissary-update without a version");
+    m.kind = Message::Kind::EmissaryUpdate;
+    m.version = v;
+  }
   else if (m.type == "twos-off")
   {
     const auto match_id = Str(o, "matchId", 128);

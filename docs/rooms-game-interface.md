@@ -132,6 +132,8 @@ A request the server refuses changes nothing and turns the line red with the ser
 
 Dolphin also counts as busy whatever it knows itself (a search, a session, a room start), whatever `screen` says. `screen` also fills `game-status.json` for the launcher.
 
+**EmissaryRecomp's update (2026-11-26, `docs/design/brawl-recompiled.md` §16).** In a recomp that mm told of a newer release (`emissary-update`, `docs/rooms-protocol.md`), `game-status.json` carries `"emissaryUpdate": {"version": "v0.7.2", "requested": null}`; `requested` becomes the time (ISO) the player pressed Update Now in the game's "Update Available" box, which shows only while `state` is `idle`. The launcher reads it (`dolphin/emissary/update_watch.ts`). Dolphin never writes it.
+
 ---
 
 ## 3. Flows

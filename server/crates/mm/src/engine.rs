@@ -366,6 +366,10 @@ pub enum Input {
         seq: u64,
         result: FetchResult,
     },
+    /// EmissaryRecomp's latest release, read again (`emissary_release_url`; only when it changed):
+    /// [`Engine::set_emissary_release`], and a new version is told to the running recomps older
+    /// than it (`emissary-update`).
+    EmissaryRelease(crate::versions::EmissaryRelease),
     /// The answer to [`Output::FetchRuleset`].
     RulesetFetched(RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>),
     /// The answer to [`Output::FetchRulesetList`].
@@ -806,6 +810,8 @@ pub struct Engine {
     /// The recomp's latest release (`emissary_release_url`): its core release per platform with a
     /// download. None until it is first read.
     emissary_release: Option<Vec<(&'static str, String)>>,
+    /// That release's own version (`v0.7.2`), for `emissary-update` and the recomp's refusals.
+    emissary_tag: Option<String>,
     geoip_read: Option<Instant>,
 }
 
@@ -945,6 +951,7 @@ impl Engine {
             feed_files: FeedVersions::default(),
             feed_read: None,
             emissary_release: None,
+            emissary_tag: None,
             geoip_read: None,
         }
     }
@@ -1003,6 +1010,63 @@ impl Engine {
         }
         self.emissary_release = Some(pairs);
         self.merge_feed();
+    }
+
+    fn on_emissary_release(&mut self, release: crate::versions::EmissaryRelease, out: &mut Vec<Output>) {
+        let new_tag = release.tag.is_some() && release.tag != self.emissary_tag;
+        self.emissary_tag = release.tag;
+        self.set_emissary_release(release.platforms);
+        if !new_tag {
+            return;
+        }
+        let behind: Vec<ConnId> = self
+            .conns
+            .iter()
+            .filter_map(|(id, c)| match &c.state {
+                State::Online(o) if self.emissary_update_for(&o.client).is_some() => Some(*id),
+                _ => None,
+            })
+            .collect();
+        if !behind.is_empty() {
+            tracing::info!(count = behind.len(), tag = ?self.emissary_tag, "EmissaryRecomp update told to running recomps");
+        }
+        for conn in behind {
+            self.send_emissary_update(out, conn);
+        }
+    }
+
+    /// The release a running recomp should update to (`emissary-update`): the latest release's
+    /// version when `client` is a recomp older than it, on a platform that release has a download
+    /// for. Never for a build whose version isn't one (a development build says `0.0.0` or nothing).
+    fn emissary_update_for(&self, client: &ClientBuild) -> Option<&str> {
+        if client.engine != common::client_engine::EMISSARY {
+            return None;
+        }
+        let tag = self.emissary_tag.as_deref()?;
+        let have = parse_version(&client.engine_version);
+        if have == (0, 0, 0) || have >= parse_version(tag) {
+            return None;
+        }
+        let has_download = self.emissary_release.as_ref()?.iter().any(|(p, _)| *p == client.platform);
+        has_download.then_some(tag)
+    }
+
+    fn send_emissary_update(&self, out: &mut Vec<Output>, conn: ConnId) {
+        let Some(Conn { state: State::Online(o), .. }) = self.conns.get(&conn) else { return };
+        if let Some(tag) = self.emissary_update_for(&o.client) {
+            let msg = common::rooms::EmissaryUpdate { kind: common::rooms::EMISSARY_UPDATE.into(), version: tag.into() };
+            Self::send(out, conn, &msg);
+        }
+    }
+
+    /// What a game too old to play is told: [`msg::update_to`], or for a recomp
+    /// [`msg::update_emissary_to`] with its latest release's version.
+    fn update_message(&self, client: &ClientBuild, latest: &str) -> String {
+        if client.engine == common::client_engine::EMISSARY {
+            msg::update_emissary_to(self.emissary_tag.as_deref())
+        } else {
+            msg::update_to(latest)
+        }
     }
 
     fn merge_feed(&mut self) {
@@ -1272,6 +1336,7 @@ impl Engine {
                 }
             }
             Input::MatchesRestored(rows) => self.on_matches_restored(now, rows, &mut out),
+            Input::EmissaryRelease(release) => self.on_emissary_release(release, &mut out),
             Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
             Input::RulesetListFetched { conn, result } => match result {
                 Ok(rulesets) => Self::send(
@@ -1736,7 +1801,8 @@ impl Engine {
                 if matches!(req, RoomRequest::Ready { ready: true, .. }) {
                     if let Some(latest) = self.outdated(&o.client) {
                         tracing::info!(conn, version = %o.client.app_version, %latest, "ready refused: out of date");
-                        return room_error(out, common::rooms::ROOM_READY, &msg::update_to(&latest));
+                        let text = self.update_message(&o.client, &latest);
+                        return room_error(out, common::rooms::ROOM_READY, &text);
                     }
                 }
                 let who = MemberInfo {
@@ -1892,7 +1958,8 @@ impl Engine {
     fn on_hello(&mut self, now: Instant, conn: ConnId, h: common::rooms::Hello, out: &mut Vec<Output>) {
         let client = ClientBuild::new(h.app_version, h.platform, &h.engine, &h.engine_version);
         if let Some(latest) = self.outdated(&client) {
-            return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
+            let text = self.update_message(&client, &latest);
+            return self.refuse_hello(out, conn, &text, Some(latest.clone()));
         }
         let Ok(uid) = Uuid::parse_str(h.user.uid.trim()) else {
             return self.refuse_hello(out, conn, msg::NOT_LOGGED_IN, None);
@@ -1960,7 +2027,8 @@ impl Engine {
         }
         let client = ClientBuild::new(t.app_version, t.platform, &t.engine, &t.engine_version);
         if let Some(latest) = self.outdated(&client) {
-            return self.refuse(out, conn, msg::update_to(&latest));
+            let text = self.update_message(&client, &latest);
+            return self.refuse(out, conn, text);
         }
         let Ok(uid) = Uuid::parse_str(t.user.uid.trim()) else {
             return self.refuse(out, conn, msg::NOT_LOGGED_IN);
@@ -2247,6 +2315,7 @@ impl Engine {
         }
         self.live.presence(now, uid, true, None, out);
         Self::send(out, conn, &hello_ok());
+        self.send_emissary_update(out, conn);
     }
 
     /// A room's game ticket from a verified account.
@@ -5229,9 +5298,11 @@ mod tests {
         let check = json!({"type": "speed-check", "mode": "ranked", "windows": [59.9, 59.9], "gaps": 0,
                            "backend": "Vulkan"});
 
-        // A recomp built from the 3.5.0 core: refused on Windows exactly as our Dolphin 3.5.0 is.
+        // A recomp built from the 3.5.0 core: refused on Windows exactly as our Dolphin 3.5.0 is,
+        // in its own name (its release's version isn't known without the release read).
         let out = hello(&mut h, 1, &users[0], "3.5.0", Some("emissary"));
-        assert_eq!(sent(&out, 1)[0]["error"], msg::update_to("3.6.0"));
+        assert_eq!(sent(&out, 1)[0]["error"], msg::update_emissary_to(None));
+        assert_eq!(sent(&out, 1)[0]["latestVersion"], "3.6.0");
         assert!(disconnected(&out, 1));
         // From the 3.6.0 core: in, and its numbers say which engine.
         let out = hello(&mut h, 2, &users[1], "3.6.0", Some(" Emissary "));
@@ -5262,7 +5333,7 @@ mod tests {
         v["platform"] = json!("win");
         v["engine"] = json!("emissary");
         let out = h.raw(7, v.to_string().as_bytes());
-        assert_eq!(sent(&out, 7), vec![json!({"type": "create-ticket-resp", "error": msg::update_to("3.5.0")})]);
+        assert_eq!(sent(&out, 7), vec![json!({"type": "create-ticket-resp", "error": msg::update_emissary_to(None)})]);
         h.connect(8, 8);
         v["appVersion"] = json!("3.5.0");
         let out = h.raw(8, v.to_string().as_bytes());
@@ -5305,7 +5376,66 @@ mod tests {
         let out = hello(&mut h, 3, &users[2], "3.5.0", "emissary");
         assert!(sent(&out, 3)[0].get("error").is_none(), "{:?}", sent(&out, 3));
         let out = hello(&mut h, 4, &users[3], "3.4.0", "emissary");
-        assert_eq!(sent(&out, 4)[0]["error"], msg::update_to("3.5.0"));
+        assert_eq!(sent(&out, 4)[0]["error"], msg::update_emissary_to(None));
+    }
+
+    /// A running recomp older than the latest release is told so (`emissary-update`) as it comes
+    /// online and, while it runs, as soon as mm reads a new release; a recomp on that release, a
+    /// development build, a platform the release has no download for and Dolphins are not. A
+    /// recomp refused for its core is told the release's version.
+    #[test]
+    fn a_running_recomp_hears_of_a_new_release() {
+        let mut h = Harness::new(EngineConfig {
+            emissary_release_url: Some("https://example.invalid/releases/latest".into()),
+            ..Default::default()
+        });
+        let users: Vec<MmUser> =
+            (b'A'..b'G').map(|c| user(&format!("U{}#1", c as char), &format!("u{}", c as char))).collect();
+        for u in &users {
+            h.add(u);
+        }
+        let hello = |h: &mut Harness, conn: ConnId, u: &MmUser, platform: &str, engine: &str, version: &str| {
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": "3.5.0", "platform": platform, "engine": engine, "engineVersion": version,
+            });
+            h.connect(conn, conn as u16);
+            h.raw(conn, v.to_string().as_bytes())
+        };
+        let release = |tag: &str, platforms: &[&'static str]| crate::versions::EmissaryRelease {
+            platforms: platforms.iter().map(|p| (*p, "3.5.0".to_string())).collect(),
+            tag: Some(tag.into()),
+        };
+        let update = |v: &str| json!({"type": "emissary-update", "version": v});
+        h.input(Input::EmissaryRelease(release("v0.7.1", &["win", "linux"])));
+        let out = hello(&mut h, 1, &users[0], "win", "emissary", "0.7.0");
+        assert_eq!(sent(&out, 1), vec![json!({"type": "hello-resp", "gameAlive": true}), update("v0.7.1")]);
+        let out = hello(&mut h, 2, &users[1], "win", "emissary", "v0.7.1");
+        assert_eq!(sent(&out, 2), vec![json!({"type": "hello-resp", "gameAlive": true})]);
+        let out = hello(&mut h, 3, &users[2], "win", "emissary", "");
+        assert_eq!(sent(&out, 3).len(), 1, "a build without a version is never told");
+        let out = hello(&mut h, 4, &users[3], "mac", "emissary", "0.7.0");
+        assert_eq!(sent(&out, 4).len(), 1, "no macOS download in this release");
+        let out = hello(&mut h, 5, &users[4], "win", "dolphin", "0.7.0");
+        assert_eq!(sent(&out, 5).len(), 1);
+
+        // v0.7.2 comes out while they run: every recomp behind it, at once.
+        let out = h.input(Input::EmissaryRelease(release("v0.7.2", &["win", "linux", "mac"])));
+        for conn in [1, 2, 4] {
+            assert_eq!(sent(&out, conn), vec![update("v0.7.2")], "conn {conn}");
+        }
+        assert!(sent(&out, 3).is_empty() && sent(&out, 5).is_empty());
+        // The same release read again tells nobody again.
+        assert!(h.input(Input::EmissaryRelease(release("v0.7.2", &["win", "linux", "mac"]))).is_empty());
+
+        // A release with a newer core refuses the older recomps in their own words.
+        let mut newer = release("v0.7.3", &["win"]);
+        newer.platforms = vec![("win", "3.6.0".into())];
+        h.input(Input::EmissaryRelease(newer));
+        let out = hello(&mut h, 6, &users[5], "win", "emissary", "0.7.2");
+        assert_eq!(sent(&out, 6)[0]["error"], msg::update_emissary_to(Some("v0.7.3")));
+        assert_eq!(msg::update_emissary_to(Some("v0.7.3")), "Close Emissary and update to v0.7.3");
     }
 
     #[test]

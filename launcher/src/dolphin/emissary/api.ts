@@ -3,6 +3,7 @@ import {
   ipc_emissaryCancel,
   ipc_emissaryGetState,
   ipc_emissaryInstall,
+  ipc_emissaryRelaunch,
   ipc_emissaryRemove,
   ipc_emissaryState,
 } from "./ipc";
@@ -30,6 +31,10 @@ const emissaryApi: EmissaryService = {
   },
   onState(handle) {
     const { destroy } = ipc_emissaryState.renderer!.handle(async (state) => handle(state));
+    return destroy;
+  },
+  onRelaunch(handle) {
+    const { destroy } = ipc_emissaryRelaunch.renderer!.handle(async () => handle());
     return destroy;
   },
 };

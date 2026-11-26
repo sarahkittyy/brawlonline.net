@@ -516,6 +516,22 @@ TEST(RoomMessages, CutsLongAndHostileStrings)
   EXPECT_EQ(t.view->status_text, "linebreak");
 }
 
+// mm's emissary-update (docs/design/brawl-recompiled.md §16): a version shown in the game and
+// written for the launcher, so `v` and digits and dots only.
+TEST(RoomMessages, EmissaryUpdate)
+{
+  const Message m = Parse(R"({"type": "emissary-update", "version": "v0.7.2"})");
+  EXPECT_EQ(m.kind, Message::Kind::EmissaryUpdate);
+  EXPECT_EQ(m.version, "v0.7.2");
+  for (const char* bad : {R"({"type": "emissary-update"})", R"({"type": "emissary-update", "version": "0.7.2"})",
+                          R"({"type": "emissary-update", "version": "v"})",
+                          R"({"type": "emissary-update", "version": "v0.7.2 <b>"})",
+                          R"({"type": "emissary-update", "version": 7})"})
+  {
+    EXPECT_EQ(KindOf(bad), Message::Kind::Invalid) << bad;
+  }
+}
+
 TEST(RoomMessages, OtherMessages)
 {
   Message m = Parse(R"({"type": "hello-resp"})");

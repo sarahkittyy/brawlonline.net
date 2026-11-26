@@ -23,6 +23,7 @@ pub const TEAM_COUNT: u8 = 3;
 
 pub const HELLO: &str = "hello";
 pub const HELLO_RESP: &str = "hello-resp";
+pub const EMISSARY_UPDATE: &str = "emissary-update";
 pub const ROOM_CREATE: &str = "room-create";
 pub const ROOM_JOIN: &str = "room-join";
 pub const ROOM_LEAVE: &str = "room-leave";
@@ -882,6 +883,18 @@ pub struct HelloResp {
     /// older mm answers an unknown message with a `room-error`, which the game shows).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub game_alive: bool,
+}
+
+/// `emissary-update`, server → client: a running EmissaryRecomp is older than its latest release
+/// (`version`, its tag: `v0.7.2`). Sent on the online connection after `hello-resp` and when a
+/// release comes out while it runs; the game shows "Update Available" and tells the launcher
+/// (game-status.json `emissaryUpdate`). Only to `engine: emissary` connections; games that don't
+/// know it ignore it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmissaryUpdate {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub version: String,
 }
 
 /// One public room in the launcher's list.
