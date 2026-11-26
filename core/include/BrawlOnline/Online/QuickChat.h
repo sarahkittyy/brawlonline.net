@@ -4,7 +4,8 @@
 // Quick chat (docs/design/quick-chat.md): 16 messages the player sets in the launcher (Settings >
 // Social), sent with a GameCube controller's D-pad on the online CSS. A first press opens that
 // direction's group of four, a second press sends the message in its direction to the chat (as if
-// typed: Online::Chat::Send). The window is core/ui QuickChatUI.
+// typed: Online::Chat::Send), or closes the group if that slot is unset. The window is core/ui
+// QuickChatUI.
 //
 // On the CSS the D-pad moves the hand like the stick (measured 2026-11-26); while quick chat can be
 // used it is taken out of what the game reads, and B too while a group is open (B closes it):

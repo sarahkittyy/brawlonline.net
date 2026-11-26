@@ -148,17 +148,21 @@ TEST(QuickChat, SameDirectionTwiceSendsThatOne)
   EXPECT_EQ(s_sent[0], "ggs");
 }
 
-TEST(QuickChat, EmptyGroupsDontOpenAndEmptySlotsSendNothing)
+TEST(QuickChat, EmptyGroupsDontOpenAndEmptySlotsClose)
 {
   Ready(1000);
   QC::PressForTesting(QC::Right);  // nothing in Right's group
   EXPECT_EQ(QC::Tick(1000, nullptr).state, QC::View::State::Closed);
   QC::PressForTesting(QC::Left);
-  QC::PressForTesting(QC::Up);  // Left's Up is empty: still open
   const auto v = QC::Tick(1000, nullptr);
   EXPECT_EQ(v.state, QC::View::State::Open);
   EXPECT_EQ(v.group, QC::Left);
+  QC::PressForTesting(QC::Up);  // Left's Up is unset: the menu closes, nothing sent
+  EXPECT_EQ(QC::Tick(1010, nullptr).state, QC::View::State::Closed);
   EXPECT_TRUE(s_sent.empty());
+  // The next press opens a group again.
+  QC::PressForTesting(QC::Up);
+  EXPECT_EQ(QC::Tick(1020, nullptr).state, QC::View::State::Open);
 }
 
 TEST(QuickChat, ClosesAfterAWhileOrOnB)

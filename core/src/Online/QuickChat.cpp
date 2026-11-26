@@ -290,8 +290,12 @@ View Tick(u64 now_ms, Result* result)
     }
     v.last_press_ms = now_ms;
     const std::string text = s.messages[4 * v.group + p];
+    // An unset slot (the menu's dash) closes the menu, as B does.
     if (text.empty())
+    {
+      v.state = View::State::Closed;
       continue;
+    }
     // Sent without the lock: the pad's reads (FilterPad) don't wait for the encryption.
     const auto send = s.send;
     lk.unlock();

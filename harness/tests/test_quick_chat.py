@@ -3,11 +3,12 @@ end to end through the real servers.
 
 Two booted P+ Dolphins in a room (as test_chat.py): ines's launcher writes quick-chat.json, the
 D-pad then stops moving her hand on the room CSS, Up opens the Up group (the chat window's frames
-say so), Right sends its message to otto as chat, B closes a group without reaching the game, and
-with every message cleared the D-pad moves the hand again.
+say so), Right sends its message to otto as chat, B or an unset slot closes a group, and with
+every message cleared the D-pad moves the hand again. ines plays in a real window (D3D11, muted): a
+NoGUI Dolphin without one draws no ImGui, so quick chat would never be usable.
 
-PPHARNESS_QUICK_CHAT_SHOTS=<dir>: ines plays in a real window (D3D11) and each state is captured
-with PrintWindow, ImGui included (the harness's screenshot is the game's picture only).
+PPHARNESS_QUICK_CHAT_SHOTS=<dir>: each state is captured with PrintWindow, ImGui included (the
+harness's screenshot is the game's picture only).
 
     PPHARNESS_INSTANCE_PREFIX=qc- python -m pytest harness/tests/test_quick_chat.py -m "dolphin and server"
 """
@@ -31,7 +32,8 @@ from test_chat import hold_screen, readers, texts, until_chat
 from test_online import _wait
 from test_rooms import PLUGIN, Player, _logged_in, _online, _to_versus_css, backend, patch_sd  # noqa: F401
 
-pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
+pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu,
+              pytest.mark.skipif(sys.platform != "win32", reason="ines plays in a win32 window")]
 
 SHOTS = os.environ.get("PPHARNESS_QUICK_CHAT_SHOTS")
 W, H = 1280, 720
@@ -164,8 +166,9 @@ class Shooter:
 def test_quick_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance]) -> None:
     ua = backend.create_user("ines", "INES")
     ub = backend.create_user("otto", "OTTO")
-    # ines draws ImGui (the chat window and quick chat's menu need a video backend).
-    a = boot(dolphin, "qc-ines", backend, ua, window=bool(SHOTS), video="D3D11")
+    # ines draws ImGui in a real window (the chat window and quick chat's menu; a NoGUI Dolphin
+    # without one draws no ImGui, so quick chat never becomes usable there).
+    a = boot(dolphin, "qc-ines", backend, ua, window=True, video="D3D11")
     b = boot(dolphin, "qc-otto", backend, ub, window=False)
     for p in (a, b):
         _to_versus_css(p)
@@ -226,6 +229,12 @@ def test_quick_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., Dol
     assert last_frame(a)["quick_chat"] == 0
     after = B.read_css_area(a.c.read_mem, 0)
     assert area is not None and after is not None and after.in_hand == area.in_hand
+
+    # An unset slot (Left's Up) closes the group and sends nothing.
+    B.tap(a.c, 0, ["DLEFT"], hold=4, release=12)
+    assert last_frame(a)["quick_chat"] == 1
+    B.tap(a.c, 0, ["DUP"], hold=4, release=12)
+    assert last_frame(a)["quick_chat"] == 0
 
     # An empty group doesn't open (Right and Down have nothing).
     B.tap(a.c, 0, ["DDOWN"], hold=4, release=12)

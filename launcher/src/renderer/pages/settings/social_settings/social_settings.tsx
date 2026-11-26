@@ -36,7 +36,7 @@ export const ChatSettings = () => {
           </div>
         </Tooltip>
       </SettingItem>
-      <SettingItem name={Messages.quickChat()}>
+      <SettingItem name={Messages.quickChat()} description={Messages.quickChatDescription()}>
         <QuickChatSetting disabled={disableChat} />
       </SettingItem>
     </>
