@@ -525,6 +525,43 @@ void LockIcon(float scale)
                         ImGui::GetColorU32(ImGuiCol_MenuBarBg));
 }
 
+// Quick chat's D-pad (Online/QuickChat.h), drawn from shapes, `h` high, its top-left at `p`.
+void DrawDPadGlyph(ImDrawList* draw, ImVec2 p, float h, ImU32 col, ImU32 hole)
+{
+  const float arm = std::round(h / 3.0f);
+  const float x = std::round(p.x);
+  const float y = std::round(p.y + (h - 3.0f * arm) * 0.5f);
+  const float round = 0.3f * arm;
+  draw->AddRectFilled({x + arm, y}, {x + 2.0f * arm, y + 3.0f * arm}, col, round);
+  draw->AddRectFilled({x, y + arm}, {x + 3.0f * arm, y + 2.0f * arm}, col, round);
+  draw->AddCircleFilled({x + 1.5f * arm, y + 1.5f * arm}, 0.28f * arm, hole);
+}
+
+// Width of the D-pad glyph for a text line.
+float DPadWidth()
+{
+  return 3.0f * std::round(0.8f * ImGui::GetTextLineHeight() / 3.0f);
+}
+
+// On the menu bar while quick chat can be used here (the CSS, a message set): the D-pad, its
+// tooltip naming it as the title names the chat key.
+void QuickChatIcon()
+{
+  const float h = ImGui::GetTextLineHeight();
+  const float w = DPadWidth();
+  const ImVec2 item = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##quickchat", ImVec2(w, h));
+  if (ImGui::IsItemHovered())
+  {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted("Quick Chat (D-Pad)");
+    ImGui::EndTooltip();
+  }
+  DrawDPadGlyph(ImGui::GetWindowDrawList(),
+                {item.x, item.y + ImGui::GetStyle().FramePadding.y + 0.1f * h}, 0.8f * h,
+                ImGui::GetColorU32(SYSTEM_COLOR), ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+}
+
 // Who watches, in the eye's tooltip: "name (code)" in their colours, in columns of 20 when there
 // are many, and "+N" for those the list leaves out.
 void DrawSpectatorList(const Online::Chat::View& v)
@@ -776,11 +813,18 @@ void DrawMenuBarPlayers(float scale)
   const float lock_w = 0.75f * ImGui::GetTextLineHeight();
   const float code_w =
       v.code.empty() ? 0.0f : ImGui::CalcTextSize(v.code.data(), v.code.data() + v.code.size()).x;
+  const bool quick = Online::QuickChat::Usable(Common::Timer::NowMs());
+  const float quick_w = quick ? DPadWidth() + 2.0f * gap : 0.0f;
   const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-  const float start = right - lock_w - (v.code.empty() ? 0.0f : code_w + gap);
+  const float start = right - lock_w - quick_w - (v.code.empty() ? 0.0f : code_w + gap);
   if (start > ImGui::GetCursorPosX() + 8.0f * scale)
   {
     ImGui::SetCursorPosX(start);
+    if (quick)
+    {
+      QuickChatIcon();
+      ImGui::SameLine(0.0f, 2.0f * gap);
+    }
     if (!v.code.empty())
     {
       ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
@@ -1419,6 +1463,8 @@ void DisplayFrame(float scale)
   }
 
   const int unread = collapsed ? UnreadCount() : 0;
+  // Folded with quick chat usable: the D-pad at the title bar's end (QuickChatIcon).
+  const bool quick_folded = collapsed && Online::QuickChat::Usable(now);
   const std::string title = Title(unread);
   ImGui::SetNextWindowCollapsed(collapsed, ImGuiCond_Always);
   if (collapsed)
@@ -1428,7 +1474,8 @@ void DisplayFrame(float scale)
     const ImGuiStyle& style = ImGui::GetStyle();
     const float pad = 8.0f * scale;
     const float w = 3.0f * style.FramePadding.x + ImGui::GetFontSize() + style.ItemInnerSpacing.x +
-                    ImGui::CalcTextSize(title.c_str()).x;
+                    ImGui::CalcTextSize(title.c_str()).x +
+                    (quick_folded ? DPadWidth() + 2.0f * style.ItemInnerSpacing.x : 0.0f);
     ImGui::SetNextWindowPos(ImVec2(s_top_left_right > 0 ? s_top_left_right + pad : pad, pad),
                             ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(std::ceil(w), ImGui::GetFrameHeight()), ImGuiCond_Always);
@@ -1463,6 +1510,18 @@ void DisplayFrame(float scale)
   // A double click on the title bar folds or unfolds it in this Begin, not foreseen above (the
   // player's too). Unfolded from the top: where the player put it (its size from the next frame).
   const bool now_collapsed = ImGui::IsWindowCollapsed();
+  if (now_collapsed && quick_folded)
+  {
+    // The folded bar's D-pad, at its right end (its width counted it above).
+    ImGuiWindow* const w = ImGui::GetCurrentWindow();
+    const ImRect bar = w->TitleBarRect();
+    const float h = 0.8f * ImGui::GetTextLineHeight();
+    const float x = bar.Max.x - ImGui::GetStyle().FramePadding.x - DPadWidth();
+    w->DrawList->PushClipRect(bar.Min, bar.Max);
+    DrawDPadGlyph(w->DrawList, {x, bar.Min.y + (bar.GetHeight() - h) * 0.5f}, h,
+                  ImGui::GetColorU32(SYSTEM_COLOR), ImGui::GetColorU32(ImGuiCol_TitleBgCollapsed));
+    w->DrawList->PopClipRect();
+  }
   if (now_collapsed != collapsed)
   {
     s.peek = false;

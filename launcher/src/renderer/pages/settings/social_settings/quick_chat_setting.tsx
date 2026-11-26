@@ -34,10 +34,10 @@ const ARM_CELL: Record<QuickChatDirection, string> = {
   left: "2 / 1 / 3 / 2",
 };
 const ARM_RADIUS: Record<QuickChatDirection, string> = {
-  up: "9px 9px 0 0",
-  right: "0 9px 9px 0",
-  down: "0 0 9px 9px",
-  left: "9px 0 0 9px",
+  up: "8px 8px 0 0",
+  right: "0 8px 8px 0",
+  down: "0 0 8px 8px",
+  left: "8px 0 0 8px",
 };
 // Where a dot or notch sits in its arm: toward the tip.
 const ROTATE: Record<QuickChatDirection, number> = { up: 0, right: 90, down: 180, left: 270 };
@@ -110,14 +110,14 @@ const MessageField = ({
           resize: none;
           overflow: hidden;
           font: inherit;
-          font-size: 14px;
-          line-height: 20px;
+          font-size: 13px;
+          line-height: 18px;
           text-align: ${align};
           color: var(--text-primary);
           background: rgba(255, 255, 255, 0.035);
           border: 1px solid var(--line-soft);
-          border-radius: 10px;
-          padding: 9px 12px ${showCount ? 22 : 9}px;
+          border-radius: 8px;
+          padding: 6px 10px;
           outline: none;
           transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
           &::placeholder {
@@ -133,22 +133,24 @@ const MessageField = ({
           }
         `}
       />
-      {showCount && (
-        <span
-          aria-hidden={true}
-          css={css`
-            position: absolute;
-            bottom: 5px;
-            ${align === "right" ? "left" : "right"}: 10px;
-            font-size: 11px;
-            font-variant-numeric: tabular-nums;
-            pointer-events: none;
-            color: ${length >= QUICK_CHAT_MAX_CHARACTERS ? "var(--accent-primary-bright)" : "var(--text-very-dim)"};
-          `}
-        >
-          {length}/{QUICK_CHAT_MAX_CHARACTERS}
-        </span>
-      )}
+      {/* Under the field, outside it: showing it moves nothing. */}
+      <span
+        aria-hidden={true}
+        css={css`
+          position: absolute;
+          top: calc(100% + 1px);
+          ${align === "right" ? "left" : "right"}: 8px;
+          font-size: 10px;
+          line-height: 12px;
+          font-variant-numeric: tabular-nums;
+          pointer-events: none;
+          opacity: ${showCount ? 1 : 0};
+          transition: opacity 120ms ease;
+          color: ${length >= QUICK_CHAT_MAX_CHARACTERS ? "var(--accent-primary-bright)" : "var(--text-very-dim)"};
+        `}
+      >
+        {length}/{QUICK_CHAT_MAX_CHARACTERS}
+      </span>
     </div>
   );
 };
@@ -208,7 +210,7 @@ const DPad = ({
       }}
       css={css`
         display: grid;
-        grid-template: repeat(3, 40px) / repeat(3, 40px);
+        grid-template: repeat(3, 34px) / repeat(3, 34px);
         filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
       `}
     >
@@ -222,8 +224,8 @@ const DPad = ({
           justify-content: center;
           &::after {
             content: "";
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: rgba(0, 0, 0, 0.22);
           }
@@ -276,13 +278,13 @@ const DPad = ({
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
                 border-bottom: 6px solid ${lit ? "var(--surface-0)" : "rgba(255, 255, 255, 0.45)"};
-                transform: translate(-50%, -50%) rotate(${ROTATE[d]}deg) translateY(-12px);
+                transform: translate(-50%, -50%) rotate(${ROTATE[d]}deg) translateY(-10px);
               }
             `}
           >
             <span
               css={css`
-                transform: rotate(${ROTATE[d]}deg) translateY(4px) rotate(-${ROTATE[d]}deg);
+                transform: rotate(${ROTATE[d]}deg) translateY(3px) rotate(-${ROTATE[d]}deg);
               `}
             >
               <GroupDots filled={filled} lit={lit} />
@@ -352,9 +354,9 @@ export const QuickChatSetting = ({ disabled }: { disabled: boolean }) => {
           "left pad right"
           "down down down";
         align-items: center;
-        gap: 14px 18px;
-        padding: 22px 22px 24px;
-        border-radius: 16px;
+        gap: 16px 14px;
+        padding: 18px 20px 20px;
+        border-radius: 14px;
         background: var(--surface-1);
         border: 1px solid var(--line-soft);
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
@@ -367,7 +369,7 @@ export const QuickChatSetting = ({ disabled }: { disabled: boolean }) => {
         css={css`
           grid-area: up;
           justify-self: center;
-          width: min(100%, 420px);
+          width: min(100%, 340px);
           animation: ${appear} 140ms ease-out;
         `}
       >
@@ -403,7 +405,7 @@ export const QuickChatSetting = ({ disabled }: { disabled: boolean }) => {
         css={css`
           grid-area: down;
           justify-self: center;
-          width: min(100%, 420px);
+          width: min(100%, 340px);
           animation: ${appear} 140ms ease-out;
         `}
       >

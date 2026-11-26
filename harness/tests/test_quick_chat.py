@@ -238,3 +238,18 @@ def test_quick_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., Dol
     B.tap(a.c, 0, ["DDOWN"], hold=20, release=10)
     assert hand(a)[1] != before[1]
     assert texts(b.c.call("chat_status"), "message") == ["one more?", "ありがとう！"]
+
+    if SHOTS:
+        # Folded (the title bar's arrow): the D-pad on the bar says quick chat is there.
+        write_quick_chat(a, MESSAGES)
+        _wait(lambda: (lambda q: q if q["usable"] else None)(quick(a)), 10, "quick chat usable")
+        x, y = last_frame(a)["rect"][:2]
+        for buttons in (None, 1, 0):
+            a.c.call("osd_mouse", x=x + 10, y=y + 10, **({} if buttons is None else {"buttons": buttons}))
+            B.step(a.c, 6)
+        a.c.call("osd_mouse", x=600, y=500)
+        B.step(a.c, 20)
+        assert last_frame(a)["collapsed"]
+        shoot("04-folded")
+        B.tap(a.c, 0, ["DUP"], hold=4, release=12)
+        shoot("05-folded-up-open")
