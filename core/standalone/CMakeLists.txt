@@ -263,7 +263,7 @@ endif()
 
 # ---- Dolphin's controller settings for the engine's pads (BrawlOnline/DolphinPads.h) ----------
 # Dolphin's own input code, as it is: GCPadNew.ini through Core/HW/GCPadEmu.cpp, InputCommon's
-# expressions and control groups, its Windows devices (DInput, XInput) and its macOS keyboard and
+# expressions and control groups, its Windows devices (DInput, XInput, WGInput) and its macOS keyboard and
 # mouse (Quartz; the parent passes the window's NSView). A parent with SDL 3 passes
 # its target in BRAWL_ONLINE_SDL3_TARGET for Dolphin's SDL gamepads over the parent's SDL. Needs the
 # sparse checkout's dolphin/Source/Core/InputCommon and Core/HW/GCPadEmu.*.
@@ -324,6 +324,10 @@ if(BRAWL_ONLINE_DOLPHIN_INPUT)
     "${BO_CORE}/compat/input/DolphinPads.cpp"
     "${BO_CORE}/compat/input/Stubs.cpp"
   )
+  if(WIN32)
+    # Dolphin's WGInput over the Windows.Gaming.Input ABI headers (no C++/WinRT in llvm-mingw).
+    list(APPEND BO_INPUT_SOURCES "${BO_CORE}/compat/input/WGInput.cpp")
+  endif()
   if(BRAWL_ONLINE_SDL3_TARGET)
     list(APPEND BO_INPUT_SOURCES "${BO_CORE}/compat/input/SdlDevices.cpp")
   endif()

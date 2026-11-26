@@ -9,9 +9,6 @@
 #include "Core/Host.h"
 #include "InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.h"
 #include "InputCommon/ControllerInterface/InputBackend.h"
-#ifdef _WIN32
-#include "InputCommon/ControllerInterface/WGInput/WGInput.h"
-#endif
 
 namespace BrawlOnline::DolphinPads
 {
@@ -46,20 +43,3 @@ std::unique_ptr<ciface::InputBackend> CreateInputBackend(ControllerInterface* co
   return std::make_unique<NoBackend>(controller_interface);
 }
 }  // namespace ciface::DualShockUDPClient
-
-#ifdef _WIN32
-// Windows.Gaming.Input needs C++/WinRT, which the engine's toolchain lacks: WGInput/ devices are
-// not listed (XInput, DInput and SDL are).
-namespace ciface::WGInput
-{
-void Init()
-{
-}
-void DeInit()
-{
-}
-void PopulateDevices()
-{
-}
-}  // namespace ciface::WGInput
-#endif
