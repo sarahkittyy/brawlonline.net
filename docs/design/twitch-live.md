@@ -38,8 +38,10 @@ without Twitch (the typed handle, or the name, becomes the account).
   fg / transparent bg big icon for both").
 - **Hover card and profile:** the stream (picture with the live dot and viewers, Twitch name, title, category)
   under the mains; the profile's opens the stream.
-- **Spectate:** a Twitch row at the top, above the featured game, only while there are streams; cards most
+- **Spectate:** a Twitch row at the top, above the featured game, while there are streams; cards most
   viewers first; "(logo) Twitch" on the left and Connect account on the right for a player who hasn't connected.
+  Without streams the row shows for that player too, its heading and Connect account only (Sarah's board: the
+  button "should be there, somewhere").
   The logo after live players' names in the list and the featured game. The featured game is a little smaller.
   A card's picture and title open the stream; the player's name under the picture is a name as anywhere else
   (hover card, profile on a click, player menu on a right click), so the card itself is no button.

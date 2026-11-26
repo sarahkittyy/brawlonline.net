@@ -550,7 +550,8 @@
 }
 
 /* Players live on Twitch while they play (docs/design/twitch-live.md): a row of their streams above the featured game,
-   only while there are any, most viewers first; Connect account at its right for a player who hasn't connected. */
+   most viewers first; Connect account at its right for a player who hasn't connected (then the row's heading shows
+   without streams too). */
 .twitch {
   margin-bottom: 14px;
 }

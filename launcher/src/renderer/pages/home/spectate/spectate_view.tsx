@@ -66,10 +66,12 @@ export type SpectateViewProps = {
   onSortChange?: (sort: LiveSort) => void;
   /** The highest-rated game above the list, out of it (the Spectate page; off in tests of the list). */
   showFeatured?: boolean;
-  /** Players live on Twitch while they play, most viewers first (docs/design/twitch-live.md): the Twitch row on top
-   * (only while there are any) and the logo beside their names. */
+  /** Players live on Twitch while they play, most viewers first (docs/design/twitch-live.md): the Twitch row's cards
+   * on top and the logo beside their names. */
   streams?: readonly TwitchStream[];
-  /** At the Twitch row's right: Connect account, for a player who hasn't connected theirs. */
+  /** At the Twitch row's right: Connect account, for a player who hasn't connected theirs. With it the row shows
+   * without streams too, its heading only (Sarah's board: "weird that the twitch "connect account" button usually on
+   * spectate doesn't show when there's no streams. i think it should be there, somewhere"). */
   twitchAction?: React.ReactNode;
   /** The Twitch row collapsed by the arrow left of its logo: only its heading shows (Sarah's board: "collapsed it just
    * shows twitch and nothing else"). */
@@ -217,9 +219,14 @@ export const SpectateView = ({
             </Tooltip>
           )}
         </div>
-        {streams.length > 0 && (
+        {(streams.length > 0 || twitchAction) && (
           <section className={styles.twitch} data-testid="twitch-row">
-            <div className={clsx(styles.twitchHead, twitchCollapsed && styles.twitchHeadCollapsed)}>
+            <div
+              className={clsx(
+                styles.twitchHead,
+                (twitchCollapsed || streams.length === 0) && styles.twitchHeadCollapsed,
+              )}
+            >
               <Tooltip
                 title={twitchCollapsed ? ShellMessages.openSidebar() : ShellMessages.foldSidebar()}
                 enterDelay={400}
@@ -244,7 +251,7 @@ export const SpectateView = ({
               <h2 className={styles.heading}>{TwitchMessages.twitch()}</h2>
               {!twitchCollapsed && twitchAction}
             </div>
-            {!twitchCollapsed && (
+            {!twitchCollapsed && streams.length > 0 && (
               <div className={styles.twitchCards}>
                 {streams.map((s) => (
                   <TwitchStreamCard key={s.uid} stream={s} />

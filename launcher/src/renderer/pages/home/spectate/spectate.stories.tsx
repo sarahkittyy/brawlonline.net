@@ -225,7 +225,7 @@ const stream = (
 });
 
 /** The Twitch row with Connect account (a stand-in: the real button asks the server), and its collapse arrow. */
-const TwitchRow = ({ collapsed: initial }: { collapsed: boolean }) => {
+const TwitchRow = ({ collapsed: initial, live = true }: { collapsed: boolean; live?: boolean }) => {
   const [collapsed, setCollapsed] = useState(initial);
   return (
     <Frame>
@@ -233,10 +233,9 @@ const TwitchRow = ({ collapsed: initial }: { collapsed: boolean }) => {
         {...props(
           { kind: "ready", games: mockGames },
           {
-            streams: [
-              stream("a1", "Drsmsh", 40, "the great ranked climb of 2026 / !projectpool"),
-              stream("b1", "Sarah", 3),
-            ],
+            streams: live
+              ? [stream("a1", "Drsmsh", 40, "the great ranked climb of 2026 / !projectpool"), stream("b1", "Sarah", 3)]
+              : [],
             twitchAction: (
               <Button
                 size="small"
@@ -260,3 +259,6 @@ const TwitchRow = ({ collapsed: initial }: { collapsed: boolean }) => {
 export const Twitch = () => <TwitchRow collapsed={false} />;
 
 export const TwitchCollapsed = () => <TwitchRow collapsed={true} />;
+
+/** Nobody live: the heading and Connect account only. */
+export const TwitchNoStreams = () => <TwitchRow collapsed={false} live={false} />;

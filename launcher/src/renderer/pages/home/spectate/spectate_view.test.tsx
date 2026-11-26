@@ -97,10 +97,15 @@ describe("SpectateView", () => {
     startedAt: "2026-10-14T02:00:00Z",
   });
 
-  it("has no Twitch row without streams", () => {
-    view({ kind: "ready", games }, { twitchAction: <button type="button">connect</button> });
+  it("has no Twitch row without streams or an action", () => {
+    view({ kind: "ready", games }, { twitchAction: null });
     expect(screen.queryByTestId("twitch-row")).toBeNull();
-    expect(screen.queryByText("connect")).toBeNull();
+  });
+
+  it("shows the Twitch row's heading and its action without streams", () => {
+    view({ kind: "ready", games }, { twitchAction: <button type="button">connect</button> });
+    expect(screen.getByTestId("twitch-row").textContent).toBe("Twitchconnect");
+    expect(screen.queryByTestId("twitch-card")).toBeNull();
   });
 
   it("lists the streams in the order given, with the action, and marks live players in the list", () => {
