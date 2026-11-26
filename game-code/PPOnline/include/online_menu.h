@@ -179,6 +179,7 @@ namespace NetMenu {
     void onlineMenuEntered(int mode);
     void setReturnButton(int b);         // WITH FRIENDS' button to highlight when it opens again
     void ensureWifiTask();               // muWifiInterfaceTask, which the Wi-Fi CSS needs
+    void dropWifiTaskOffline();          // and gone again outside the Wi-Fi sequence and the menus
 }
 
 namespace CodeEntry {

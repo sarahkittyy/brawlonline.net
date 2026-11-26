@@ -4434,6 +4434,8 @@ namespace OnlineMenu {
         bool sceneChanged = strcmp(scene, s.lastScene) != 0;
         if (sceneChanged) {
             strncpy(s.lastScene, scene, sizeof(s.lastScene) - 1);
+            // Offline Versus results waited out the Wi-Fi countdown and two network timeouts.
+            NetMenu::dropWifiTaskOffline();
             // The status line's window belongs to the CSS that just ended (its MuMsg is freed
             // with the scene): forget it until the next CSS prints its rule line (cssLine).
             // Using it later read the freed MuMsg's font and hung the game after a Direct set's

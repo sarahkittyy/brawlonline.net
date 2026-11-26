@@ -567,6 +567,36 @@ namespace NetMenu {
         }
     }
 
+    // gfSceneManager (0x805A0060) +0x10: the current sequence; its first word is its name.
+    static const char* currentSequence()
+    {
+        u32 mgr = *(u32*)0x805A0060;
+        if (!menuPtr(mgr)) return "";
+        u32 seq = *(u32*)(mgr + 0x10);
+        if (!menuPtr(seq)) return "";
+        u32 name = *(u32*)seq;
+        return menuPtr(name) ? (const char*)name : "";
+    }
+
+    // The task outlives the ONLINE pages: nothing of ours disconnects, and Brawl removes it only
+    // in the disconnect paths the faked login skips (sora_menu_main text+0x38F2C, +0x39230,
+    // +0x39B20; sora_scene text+0x3D470). Offline, the Versus results screen (ifVsResult, DOL
+    // 0x800E5858) takes a live task for a Wi-Fi game: it draws the Wi-Fi countdown, never leaves
+    // when everyone is ready, and when the countdown ends waits on the network twice, 600
+    // frames each ("isReadyNextGame(true/false) time out!!!"), before it goes on (bug report
+    // #346, EmissaryRecomp's Play, which boots to the ONLINE page). So in any sequence but the
+    // Wi-Fi one (sqNetAnyOkiraku: every online mode, rooms, the waiting room) and the menus,
+    // the task goes as Brawl's disconnect removes it (DOL 0x800C753C).
+    void dropWifiTaskOffline()
+    {
+        if (!(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
+        if (*(void**)0x805A02A4 == 0) return;
+        const char* seq = currentSequence();
+        if (!*seq || strcmp(seq, "sqNetAnyOkiraku") == 0 || strcmp(seq, "sqMenuMain") == 0) return;
+        typedef void (*DestroyFn)();
+        reinterpret_cast<DestroyFn>(0x800C753C)();
+    }
+
     void skipConnectWindow(u8* wnd)
     {
         if (!wnd || !(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
