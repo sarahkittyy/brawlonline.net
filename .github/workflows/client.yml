@@ -24,8 +24,11 @@
 #     arm64 launchers read only their own feed, so they see an update once their build is out.
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
-#   - macOS: Namespace runner profile namespace-profile-brawlonline-mac (Apple silicon), $CI_CACHE
-#     (Qt, build tree, ccache) on its cache volume. Developer ID signed (repository secrets, see
+#   - macOS: Sarah's Mac (self-hosted runner, label brawlmac, tools/ci/mac-runner) when it answers
+#     within 90 s, otherwise the Namespace runner profile namespace-profile-brawlonline-mac (Apple
+#     silicon; the mac-runner job decides; the repository variable CLIENT_MAC_RUNNER, a JSON list
+#     of labels, overrides it). $CI_CACHE (Qt, build tree, ccache) on the profile's cache volume or
+#     in the Mac's runner folder. Developer ID signed (repository secrets, see
 #     the macos job). Its DMG is submitted to Apple's notary service without waiting, and the job
 #     uploads the build (launcher-mac) and the submission (mac-notary), kept 90 days.
 #     start-mac-publish starts client-mac-publish.yml right after it (not when the whole run ends,
@@ -545,11 +548,66 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  mac-runner:
+    # Where the macOS build runs: Sarah's Mac when its runner answers, Namespace otherwise
+    # (docs/ci.md "Sarah's Mac"). Namespace bills by the minute (a Mac minute is 10 Linux ones);
+    # the Mac costs nothing but is only there while it is on, awake, at home and switched on
+    # (~/runners/ci). GITHUB_TOKEN cannot read the runners' status, so this asks the Mac: it starts
+    # mac-ping.yml (one job on the Mac's labels) and waits up to 90 s for that job to start. Not
+    # started: the ping run is cancelled and Namespace builds. The Mac running an earlier run's job
+    # counts as there (the macos job's concurrency group waits for that job anyway).
+    # CLIENT_MAC_RUNNER (JSON labels) skips the question.
+    if: ${{ vars.DISABLE_MACOS != 'true' && !inputs.windows_from_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # start and cancel mac-ping.yml
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - name: Pick the macOS runner
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OVERRIDE: ${{ vars.CLIENT_MAC_RUNNER }}
+        run: |
+          set +e +o pipefail # any failed question ends in Namespace, never in a failed job
+          mac='["self-hosted","macOS","ARM64","brawlmac"]'
+          namespace='["namespace-profile-brawlonline-mac"]'
+          pick() { echo "runs_on=$1" >>"$GITHUB_OUTPUT"; echo "macOS build: $1 ($2)"; exit 0; }
+          [ -z "$OVERRIDE" ] || pick "$OVERRIDE" "CLIENT_MAC_RUNNER"
+          for run in $(gh api "repos/$REPO/actions/runs?status=in_progress&per_page=30" --jq '.workflow_runs[].id' 2>/dev/null); do
+            if gh api "repos/$REPO/actions/runs/$run/jobs?filter=latest&per_page=100" \
+                --jq '.jobs[] | select(.status == "in_progress" and (.labels | index("brawlmac"))) | .id' 2>/dev/null | grep -q .; then
+              pick "$mac" "the Mac is running run $run"
+            fi
+          done
+          nonce="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gh workflow run mac-ping.yml -R "$REPO" --ref "$DEFAULT_BRANCH" -f nonce="$nonce" ||
+            pick "$namespace" "could not start mac-ping.yml"
+          ping_run=""
+          for i in $(seq 1 18); do
+            sleep 5
+            [ -n "$ping_run" ] || ping_run="$(gh api "repos/$REPO/actions/workflows/mac-ping.yml/runs?event=workflow_dispatch&per_page=20" \
+              --jq ".workflow_runs[] | select(.display_title == \"mac ping $nonce\") | .id" 2>/dev/null | head -n 1)"
+            [ -n "$ping_run" ] || continue
+            status="$(gh api "repos/$REPO/actions/runs/$ping_run/jobs" --jq '.jobs[0].status // ""' 2>/dev/null)"
+            case "$status" in
+              in_progress|completed) pick "$mac" "the Mac answered (mac-ping run $ping_run)" ;;
+            esac
+          done
+          [ -z "$ping_run" ] || gh run cancel "$ping_run" -R "$REPO" || true
+          pick "$namespace" "the Mac did not answer within 90 s"
+
   macos:
-    # Namespace Apple silicon runner (profile namespace-profile-brawlonline-mac): a native build
-    # (Xcode's clang, Qt from aqtinstall, macdeployqt, codesign). Apple silicon only for now. Qt,
-    # the build tree and ccache stay on the profile's cache volume. DISABLE_MACOS="true" turns it
-    # off. A failed or skipped macOS build never holds back the Linux and Windows release.
+    # Apple silicon (the mac-runner job picks Sarah's Mac or Namespace's
+    # namespace-profile-brawlonline-mac): a native build (Xcode's clang, Qt from aqtinstall,
+    # macdeployqt, codesign). Apple silicon only for now. Qt, the build tree and ccache stay in
+    # $CI_CACHE: the Namespace profile's cache volume, or the Mac's runner folder (its .env sets
+    # CI_CACHE). DISABLE_MACOS="true" turns it off. A failed or skipped macOS build never holds
+    # back the Linux and Windows release.
     #
     # Signed with the Developer ID Application certificate and notarized with an App Store Connect
     # API key (repository secrets MACOS_SIGNING_P12 (base64 .p12 with the certificate, its key and
@@ -559,11 +617,11 @@ jobs:
     # feed could not be installed over a signed one. npm ci runs before the signing keychain exists.
     # Not when finishing another run (windows_from_run): that run's macOS build is its own.
     if: ${{ vars.DISABLE_MACOS != 'true' && !inputs.windows_from_run }}
-    needs: plugin
+    needs: [plugin, mac-runner]
     concurrency:
       group: client-macos
       cancel-in-progress: false
-    runs-on: namespace-profile-brawlonline-mac
+    runs-on: ${{ fromJSON(needs.mac-runner.outputs.runs_on) }}
     timeout-minutes: 150
     env:
       VERSION: ${{ needs.plugin.outputs.version }}
@@ -577,13 +635,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          # The Mac keeps ~/.npm itself; downloading it from the Actions cache would only cost time.
+          cache: ${{ startsWith(runner.name, 'nsc-runner-') && 'npm' || '' }}
           cache-dependency-path: client/launcher/package-lock.json
       - name: Build tools
         run: |
-          brew install ninja ccache
-          # The profile's cache volume (50 GB) keeps Qt, the build tree and ccache between runs.
-          echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
+          # Sarah's Mac links its tools into ~/runners/bin (tools/ci/mac-runner/setup.sh).
+          command -v ninja >/dev/null && command -v ccache >/dev/null || brew install ninja ccache
+          # The profile's cache volume (50 GB) keeps Qt, the build tree and ccache between runs;
+          # on the Mac, CI_CACHE comes from its runner's .env.
+          if [[ "$RUNNER_NAME" == nsc-runner-* ]]; then
+            echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
+          fi
           echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
       - name: Stamp version ${{ env.VERSION }}
         run: client/.github/scripts/stamp-version.sh "$VERSION"
