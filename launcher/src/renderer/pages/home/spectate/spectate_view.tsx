@@ -3,6 +3,7 @@ import { stageInfo } from "@common/stages";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseIcon from "@mui/icons-material/Close";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LiveTvOutlinedIcon from "@mui/icons-material/LiveTvOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import SearchIcon from "@mui/icons-material/Search";
@@ -70,6 +71,10 @@ export type SpectateViewProps = {
   streams?: readonly TwitchStream[];
   /** At the Twitch row's right: Connect account, for a player who hasn't connected theirs. */
   twitchAction?: React.ReactNode;
+  /** The Twitch row collapsed by the arrow left of its logo: only its heading shows (Sarah's board: "collapsed it just
+   * shows twitch and nothing else"). */
+  twitchCollapsed?: boolean;
+  onTwitchCollapsedChange?: (collapsed: boolean) => void;
 };
 
 const NO_STREAMS: ReadonlyMap<string, TwitchStream> = new Map();
@@ -176,6 +181,8 @@ export const SpectateView = ({
   showFeatured = false,
   streams = [],
   twitchAction,
+  twitchCollapsed = false,
+  onTwitchCollapsedChange,
 }: SpectateViewProps) => {
   const status = watchingStatus(watching);
   const streamOf = useMemo(() => new Map(streams.map((s) => [s.uid, s])), [streams]);
@@ -212,16 +219,38 @@ export const SpectateView = ({
         </div>
         {streams.length > 0 && (
           <section className={styles.twitch} data-testid="twitch-row">
-            <div className={styles.twitchHead}>
+            <div className={clsx(styles.twitchHead, twitchCollapsed && styles.twitchHeadCollapsed)}>
+              <Tooltip
+                title={twitchCollapsed ? ShellMessages.openSidebar() : ShellMessages.foldSidebar()}
+                enterDelay={400}
+                disableInteractive={true}
+              >
+                <IconButton
+                  size="small"
+                  // The arrow lines up with the page's left edge (in sx: MUI's own margin and colour win over a class).
+                  sx={{ ml: "-10px", mr: "-2px", color: "var(--text-secondary)" }}
+                  aria-expanded={!twitchCollapsed}
+                  aria-label={twitchCollapsed ? ShellMessages.openSidebar() : ShellMessages.foldSidebar()}
+                  onClick={() => onTwitchCollapsedChange?.(!twitchCollapsed)}
+                  data-testid="twitch-fold"
+                >
+                  <ExpandMoreIcon
+                    fontSize="small"
+                    className={clsx(styles.chevron, twitchCollapsed && styles.chevronCollapsed)}
+                  />
+                </IconButton>
+              </Tooltip>
               <TwitchGlyph size={18} />
               <h2 className={styles.heading}>{TwitchMessages.twitch()}</h2>
-              {twitchAction}
+              {!twitchCollapsed && twitchAction}
             </div>
-            <div className={styles.twitchCards}>
-              {streams.map((s) => (
-                <TwitchStreamCard key={s.uid} stream={s} />
-              ))}
-            </div>
+            {!twitchCollapsed && (
+              <div className={styles.twitchCards}>
+                {streams.map((s) => (
+                  <TwitchStreamCard key={s.uid} stream={s} />
+                ))}
+              </div>
+            )}
           </section>
         )}
         {featured && (

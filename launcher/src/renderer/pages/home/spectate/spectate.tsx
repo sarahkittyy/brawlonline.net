@@ -19,6 +19,8 @@ const STALE_AFTER_MS = 15_000;
 const AUTO_PLAY_STORAGE_KEY = "SPECTATE_AUTO_PLAY";
 /** The list's sort, remembered on this computer. Only the list: Auto play still picks the newest live game. */
 const SORT_STORAGE_KEY = "SPECTATE_SORT";
+/** The Twitch row collapsed to its heading, remembered on this computer (expanded by default). */
+const TWITCH_COLLAPSED_STORAGE_KEY = "SPECTATE_TWITCH_COLLAPSED";
 
 /** Home > Spectate (docs/design/spectating.md §6.1): the live games, polled every 3 s while the tab is open. */
 export const Spectate = React.memo(function Spectate() {
@@ -29,6 +31,7 @@ export const Spectate = React.memo(function Spectate() {
   const now = useNow(1000);
   const [autoPlay, setAutoPlay] = useLocalStorage(AUTO_PLAY_STORAGE_KEY, false);
   const [sort, setSort] = useLocalStorage<LiveSort>(SORT_STORAGE_KEY, "newest");
+  const [twitchCollapsed, setTwitchCollapsed] = useLocalStorage(TWITCH_COLLAPSED_STORAGE_KEY, false);
   const [startingId, setStartingId] = useState<string | undefined>();
   const freshIds = useFreshIds(query.data?.games);
   const streams = useTwitchStreams();
@@ -88,6 +91,8 @@ export const Spectate = React.memo(function Spectate() {
         onSortChange={setSort}
         streams={streams}
         twitchAction={twitch?.available && !twitch.linked ? <TwitchConnectButton /> : null}
+        twitchCollapsed={twitchCollapsed}
+        onTwitchCollapsedChange={setTwitchCollapsed}
       />
     </div>
   );

@@ -122,6 +122,26 @@ describe("SpectateView", () => {
     expect(document.querySelectorAll('[data-stream="bbbbbbbbbbbb"] [data-testid="twitch-live"]').length).toBe(0);
   });
 
+  it("collapses the Twitch row to its heading: no cards, no action", () => {
+    const onCollapsed = vi.fn();
+    view(
+      { kind: "ready", games },
+      {
+        streams: [stream("zed", 3)],
+        twitchAction: <button type="button">connect</button>,
+        twitchCollapsed: true,
+        onTwitchCollapsedChange: onCollapsed,
+      },
+    );
+    expect(screen.getByTestId("twitch-row").textContent).toBe("Twitch");
+    expect(screen.queryByTestId("twitch-card")).toBeNull();
+    expect(screen.queryByText("connect")).toBeNull();
+    const fold = screen.getByTestId("twitch-fold");
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(fold);
+    expect(onCollapsed).toHaveBeenCalledWith(false);
+  });
+
   it("shows the highest-rated game the player can watch above the list, and not in it", () => {
     const rated = [
       game("aaaaaaaaaaaa", "2026-10-14T02:00:00Z", {

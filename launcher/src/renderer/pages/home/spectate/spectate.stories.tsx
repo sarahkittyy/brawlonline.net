@@ -1,5 +1,11 @@
+import type { TwitchStream } from "@accounts/types";
+import Button from "@mui/material/Button";
 import type { LiveGameEntry } from "@spectate/types";
-import React from "react";
+import React, { useState } from "react";
+
+import { TwitchGlyph } from "@/components/twitch/twitch";
+import { TwitchMessages } from "@/components/twitch/twitch.messages";
+import twitchStyles from "@/components/twitch/twitch.module.css";
 
 import styles from "./spectate.module.css";
 import type { SpectateListState, SpectateViewProps } from "./spectate_view";
@@ -162,3 +168,51 @@ export const Unreachable = () => (
     <SpectateView {...props({ kind: "unreachable" })} />
   </Frame>
 );
+
+const stream = (uid: string, displayName: string, viewers: number): TwitchStream => ({
+  uid,
+  displayName,
+  connectCode: null,
+  main: null,
+  login: displayName.toLowerCase(),
+  twitchName: displayName,
+  title: `${displayName} ranked grind`,
+  game: "Super Smash Bros. Brawl",
+  viewers,
+  thumbnail: "",
+  startedAt: "2026-10-14T02:00:00Z",
+});
+
+/** The Twitch row with Connect account (a stand-in: the real button asks the server), and its collapse arrow. */
+const TwitchRow = ({ collapsed: initial }: { collapsed: boolean }) => {
+  const [collapsed, setCollapsed] = useState(initial);
+  return (
+    <Frame>
+      <SpectateView
+        {...props(
+          { kind: "ready", games: mockGames },
+          {
+            streams: [stream("a1", "Drsmsh", 40), stream("b1", "Sarah", 3)],
+            twitchAction: (
+              <Button
+                size="small"
+                variant="outlined"
+                color="secondary"
+                className={twitchStyles.connect}
+                startIcon={<TwitchGlyph size={14} />}
+              >
+                {TwitchMessages.connectAccount()}
+              </Button>
+            ),
+            twitchCollapsed: collapsed,
+            onTwitchCollapsedChange: setCollapsed,
+          },
+        )}
+      />
+    </Frame>
+  );
+};
+
+export const Twitch = () => <TwitchRow collapsed={false} />;
+
+export const TwitchCollapsed = () => <TwitchRow collapsed={true} />;

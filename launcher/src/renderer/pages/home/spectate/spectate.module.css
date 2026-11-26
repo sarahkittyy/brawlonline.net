@@ -558,6 +558,19 @@
   margin-bottom: 8px;
 }
 
+.twitchHeadCollapsed {
+  margin-bottom: 0;
+}
+
+/* The arrow left of Twitch's logo (it collapses the row to its heading, and expands it again). */
+.chevron {
+  transition: transform 0.15s;
+}
+
+.chevronCollapsed {
+  transform: rotate(-90deg);
+}
+
 .twitchCards {
   display: flex;
   gap: 14px;
