@@ -68,7 +68,7 @@ export const ProjectPunchSettingView = ({
             component="button"
             onClick={onOpenRepo}
             underline="hover"
-            style={{ fontSize: "inherit", fontWeight: 600 }}
+            style={{ verticalAlign: "baseline", fontSize: "inherit", fontWeight: 600 }}
           >
             <GitHubIcon style={{ fontSize: "1em", verticalAlign: "-0.12em", marginRight: 4 }} />
             {PROJECT_PUNCH_AUTHOR}

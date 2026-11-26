@@ -83,6 +83,7 @@ export const PlayProjectPlusWithView = ({
                       <Link
                         component="button"
                         underline="hover"
+                        style={{ verticalAlign: "baseline", fontSize: "inherit" }}
                         onClick={(e: React.MouseEvent) => {
                           e.preventDefault();
                           onSetUp();
