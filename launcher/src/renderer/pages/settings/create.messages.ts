@@ -11,6 +11,7 @@ export const SettingsCreateMessages = {
   appSettings: () => "App Settings",
   appearance: () => "Appearance",
   advanced: () => "Advanced",
+  changelog: () => "Changelog",
   help: () => "Help",
   credits: () => "Credits",
 };

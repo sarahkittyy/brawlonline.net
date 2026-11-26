@@ -10,6 +10,7 @@ import React from "react";
 import { HashRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
 import { ThemeColorPicker } from "@/components/theme_color_picker/theme_color_picker";
+import { LatestChangelogDialog } from "@/lib/changelog/latest_changelog";
 import { useDiscordPresence } from "@/lib/discord/use_discord_activity";
 import { usePlaybackOverlay } from "@/lib/dolphin/use_playback_overlay";
 import { useAppStore } from "@/lib/hooks/use_app_store";
@@ -149,6 +150,8 @@ export function createApp({ services }: { services: Services }): {
         </Routes>
         {/* Settings > Appearance > Theme Color's wheel, over the main page. */}
         <ThemeColorPicker />
+        {/* Settings > Changelog's popup. */}
+        <LatestChangelogDialog />
       </>
     );
   };

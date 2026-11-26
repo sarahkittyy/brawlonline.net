@@ -1,3 +1,8 @@
+import React from "react";
+
+import { useLatestChangelog } from "@/lib/changelog/latest_changelog";
+import { useToasts } from "@/lib/hooks/use_toasts";
+
 import { AddonsSettings } from "./addons_settings/addons_settings";
 import { ADDONS_PATH } from "./addons_settings/paths";
 import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settings";
@@ -16,7 +21,7 @@ import { SocialSettings } from "./social_settings/social_settings";
 import type { SettingSection } from "./types";
 
 export function createSettingsPage(): { Page: React.ComponentType } {
-  const settings: SettingSection[] = [
+  const settings = (showChangelog: () => void): SettingSection[] => [
     {
       title: () => Messages.generalSettings(),
       items: [
@@ -80,6 +85,11 @@ export function createSettingsPage(): { Page: React.ComponentType } {
     {
       items: [
         {
+          // The newest patch notes' popup (lib/changelog/latest_changelog.tsx), not a page.
+          name: () => Messages.changelog(),
+          onClick: showChangelog,
+        },
+        {
           name: () => Messages.help(),
           path: "help",
           component: <HelpPage />,
@@ -93,7 +103,12 @@ export function createSettingsPage(): { Page: React.ComponentType } {
     },
   ];
 
-  const Page = () => <SettingsPage settings={settings} />;
+  const Page = () => {
+    const toasts = useToasts();
+    const showLatest = useLatestChangelog((s) => s.showLatest);
+    const sections = React.useMemo(() => settings(() => showLatest(toasts)), [showLatest, toasts]);
+    return <SettingsPage settings={sections} />;
+  };
 
   return { Page };
 }

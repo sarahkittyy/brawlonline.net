@@ -19,7 +19,8 @@ import { useEmissaryHintGlows } from "@/lib/emissary/use_emissary_hint";
 import { useMousetrap } from "@/lib/hooks/use_mousetrap";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useTabMemory } from "@/lib/hooks/use_tab_memory";
-import type { SettingSection } from "@/pages/settings/types";
+import type { SettingItem, SettingSection } from "@/pages/settings/types";
+import { isSettingAction } from "@/pages/settings/types";
 import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
 import { withThemeBackground } from "@/styles/with_theme_background";
 
@@ -75,7 +76,10 @@ const SettingsDefaultRedirect = React.memo(function SettingsDefaultRedirect({ it
 });
 
 export const SettingsPage = React.memo(({ settings }: { settings: SettingSection[] }) => {
-  const settingItems = settings.flatMap((section) => section.items).filter((item) => !item.hidden?.());
+  // The pages (an action entry, like Changelog, has none).
+  const settingItems = settings
+    .flatMap((section) => section.items)
+    .filter((item): item is SettingItem => !isSettingAction(item) && !item.hidden?.());
   const { close } = useSettingsModal();
   const setLastTab = useTabMemory((s) => s.setLastTab);
   const location = useLocation();
@@ -134,22 +138,26 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
                     }
                   >
                     {sectionItems.map((item) => {
+                      const label = (
+                        <>
+                          {item.icon ? <ListItemIcon>{item.icon}</ListItemIcon> : null}
+                          <ListItemText primary={item.name()} css={itemTextCss} />
+                        </>
+                      );
                       return (
                         <div key={item.name()}>
-                          <CustomLink
-                            to={item.path}
-                            className={addonsGlows && item.path === ADDONS_PATH ? hintStyles.glow : undefined}
-                          >
-                            {item.icon ? <ListItemIcon>{item.icon}</ListItemIcon> : null}
-                            <ListItemText
-                              primary={item.name()}
-                              css={css`
-                                .MuiTypography-body1 {
-                                  font-size: 16px;
-                                }
-                              `}
-                            />
-                          </CustomLink>
+                          {isSettingAction(item) ? (
+                            <ListItem button={true} onClick={item.onClick} css={itemCss}>
+                              {label}
+                            </ListItem>
+                          ) : (
+                            <CustomLink
+                              to={item.path}
+                              className={addonsGlows && item.path === ADDONS_PATH ? hintStyles.glow : undefined}
+                            >
+                              {label}
+                            </CustomLink>
+                          )}
                         </div>
                       );
                     })}
@@ -184,24 +192,25 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
   );
 });
 
+const itemCss = css`
+  border-radius: 10px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  margin: 2px 0;
+`;
+
+const itemTextCss = css`
+  .MuiTypography-body1 {
+    font-size: 16px;
+  }
+`;
+
 const CustomLink = ({ children, to, ...props }: LinkProps) => {
   const resolved = useResolvedPath(to);
   const match = useMatch({ path: resolved.pathname, end: true });
 
   return (
-    <ListItem
-      button={true}
-      selected={match != null}
-      component={Link}
-      to={to}
-      {...(props as any)}
-      css={css`
-        border-radius: 10px;
-        padding-top: 4px;
-        padding-bottom: 4px;
-        margin: 2px 0;
-      `}
-    >
+    <ListItem button={true} selected={match != null} component={Link} to={to} {...(props as any)} css={itemCss}>
       {children}
     </ListItem>
   );

@@ -32,11 +32,13 @@ Exactly when:
 - A test-mode launcher asks at every start, and an `everyStart` changelog opens every time without being stored as seen.
 - So a launcher that skipped releases sees the newest changelog only, and one published for a release still building doesn't show on the release before it.
 
+**Settings > Changelog** (above Help; Sarah's board, 2026-11-26: "in settings, above "help", there should be "changelog". clicking it doesn't open a new page, it just makes the latest patch changelog popup appear.") asks `GET /v1/changelogs/latest` when clicked and opens the same popup over Settings (`lib/changelog/latest_changelog.tsx`, mounted at the root in `app/create.tsx`, as the startup one lives with the main screen). It shows whatever is newest, without the build-time check, and closing it stores nothing, so the popup after the next update still comes. None published is a "No changelog yet." toast; a failed request is the usual error toast. Settings' entries can be such actions (`SettingAction` in `pages/settings/types.ts`): a button, no page or route.
+
 The page cleans the server's HTML once more (`changelog_html.ts`): only the elements and attributes the blog's renderer writes, pictures and videos only from the accounts server, links absolute and opened outside.
 
 ## Server
 
-- `changelogs` (migration 0046): `body_md`, `published_at`, `every_start`. Every changelog stays as the history (`pp-admin changelog list`); nothing serves the older ones yet.
+- `changelogs` (migration 0046): `body_md`, `published_at`, `every_start`. Every changelog stays as the history (`pp-admin changelog list`); nothing serves the older ones yet (Settings > Changelog shows the newest).
 - `GET /v1/changelogs/latest` (public, `max-age=60`): `{changelog: {id, html, publishedAt, everyStart} | null}`, the every-start one if there is one, else the newest, rendered by `blog::render`.
 - `pp-admin changelog publish [--every-start] | clear-every-start | list | render` (`server/crates/admin/src/changelog.rs`, `accounts::changelog::publish`). `publish` refuses a picture that is neither sent nor already in the media folder, and anything that isn't a PNG, JPEG, GIF, WebP, AVIF, MP4, WebM or MOV (by its bytes). Audited as `changelog.publish` / `changelog.publish_every_start`.
 - Tests: `changelog::tests`, `e2e --test changelogs`; launcher `main/changelog_version.test.ts`, `lib/changelog/changelog_html.test.ts`.
