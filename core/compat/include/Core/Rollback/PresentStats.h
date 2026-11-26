@@ -26,7 +26,18 @@ inline Cadence TakeCadence()
 inline void OnDisplayedFrameStart(bool)
 {
 }
-inline void TagDisplayedFrame(s64, s64, s64, bool)
+// The displayed pass's picture (GameplaySession at its loop top: the pass frame, the frame whose picture its copy
+// presents, GekkoNet's confirmed frame then, after a rollback). The engine's present writes the input trace's P line
+// from it (EmissaryRecomp's CoreTracePresent), as Dolphin's PresentStats does at its copy.
+struct DisplayedTag
 {
+  s64 pass_frame = -1, picture_frame = -1, picture_confirmed = -1;
+  bool after_resim = false;
+};
+inline DisplayedTag g_displayed_tag;
+inline void TagDisplayedFrame(s64 pass_frame, s64 picture_frame, s64 picture_confirmed,
+                              bool after_resimulation)
+{
+  g_displayed_tag = {pass_frame, picture_frame, picture_confirmed, after_resimulation};
 }
 }  // namespace Rollback::PresentStats

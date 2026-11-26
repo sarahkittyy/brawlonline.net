@@ -330,6 +330,40 @@ The recomp looks only while its game thread waits: a change made while a frame r
 
 Strings: none added (no UI changed).
 
+### 10.6 Input latency in the recomp against Dolphin (2026-11-26)
+
+Perf sheet ("Analyze input latency", ~1-3 frames): "reports are that input lag is higher. i think our input lag hacks to get it below console are NOT applied causing us to be several frames slower than dolphin ... magic words are immediate xfb/rush presentation/host pad decode and just looking at the graphics stack in general". Recomp `brawlonline/windows-build` 2f8cad8; this repo's part is the compat stand-in for `PresentStats::TagDisplayedFrame`, which now keeps the tag, so the recomp writes the input trace's P lines too.
+
+**Dolphin's settings in the recomp.** All three have counterparts already:
+- *Immediate XFB*: the recomp presents each picture at its copy (`GX__CopyDisp_HLE`).
+- *Rush*: the pacing wait (DetClock's, in the scheduler's idle step) falls between the draw and the next loop top, where Rush puts Dolphin's. A pass's copy comes ~4 ms after its loop top, not after a wait. Brawl's `fn_80023AE4` waits for a free XFB slot (`VIWaitForRetrace` at 0x80023B1C) before the copy, but in steady state a slot is free by then. Moving the wait after the present (a Rush port, tried with `BRAWL_RUSH`) moved the wait, not the present's phase. It was dropped.
+- *Host pad decode*: on since §10.5 (used for every frame, 0 differed).
+- *V-Sync*: aurora presents with Mailbox when it is on and Immediate when it is off, so frames never queue.
+
+**Measured** (harness Direct matches at delay 1, both players' random macros on wall-clock pad scripts; the input trace's L lines (each frame's local read) against its P lines (that frame's picture presented), and those joined to PresentMon's presents of the same process; 240 Hz LG, windowed; this PC, other sessions' builds running at times; medians):
+
+| | Dolphin | recomp before | recomp after |
+|---|---|---|---|
+| read -> loop top | 0.7 ms | 2.9 ms | 0.1 ms |
+| loop top -> copy | 1.0 | 4.1 | 3.2 |
+| copy -> its Present call | 2.5 (GPU thread) | ~0.9 (aurora's thread) | ~0.9 |
+| read -> present done, same crossplay match | 38.6-40.3 | 40.1-41.8 | 36.7-38.1 |
+| Present -> on screen | 6.3-10.8 | 6.8-11 | same |
+| read -> on screen, Dolphin pair / recomp pair | 44.4 | 51.1-51.6 | |
+| read -> on screen, same crossplay match | 46.5 / 49.2 | | 44.5 / 48.0 |
+
+Present -> screen moves by up to ~4 ms from run to run on both engines (where 60 Hz presents land in DWM's 240 Hz composition). In the same match the two engines are within 0.5 ms of each other. So the recomp was ~3 ms behind Dolphin, not frames, and that came from the read: FrameInput::Latch reads the controllers at the retrace, and the game's other threads run about 3 ms before the main loop's top takes it.
+
+**The change.** At the loop top (`BrawlOnlineCore::RunLoop`), while a match's frame pacing is on (`DetClock::MatchPacing`: not in a re-run or a load wait), `FrameInput::Relatch`:
+- pumps SDL's events;
+- looks at the GameCube ports (`PeekLocal`: no harness poll counted, no Wii Remote read);
+- puts the look in the latched frame, so the pad thread's next pass and the host decode pair up;
+- hands it to the core as a read (`HostPadsRead`).
+
+The pump matters most for the keyboard. Aurora's PADRead takes `SDL_GetKeyboardState`, which SDL updates only when events are pumped (once a frame, right after the present). So the recomp's own keyboard mapping played the keys as they were ~12 ms before the frame. SDL controllers were as fresh only while input suggestions sampled (`SDL_UpdateJoysticks` in their looks). Dolphin's controls (GCPadNew.ini) read the device when asked. `BRAWL_LOOPTOP_READ=0` keeps the retrace's read.
+
+**Checked:** `test_suggestions_crossplay[vs_dolphin]` and `[vs_recomp]` pass (1,882 and 1,898 frames, 48-79 rollbacks, 0 desyncs), and the latency kit's matches had 0 desyncs (host decode used 2,545, differed 0). Kit: E:\brawl-online-testing\latency (run.ps1, kit/test_lat.py, scripts/photon.py), deleted after the card. **Not tested:** a real keyboard, adapter or XInput pad on the recomp (the harness drives the pads, so the keyboard staleness comes from reading the code, not from a measurement), exclusive fullscreen, frame interpolation (Interpolate adds a frame by design; its menu line says so), Wii Remotes (still the retrace's read), macOS and Linux.
+
 ### Which engine (2026-11-19)
 
 Sarah: "make sure logging and stats in mm show what engine the player is on, so we can get metrics for them." (The plan was brawl-recompiled.md §7.4; the name is `emissary`, the product EmissaryRecomp.)
