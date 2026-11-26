@@ -1493,6 +1493,7 @@ dependencies = [
  "hex",
  "maxminddb",
  "rand 0.8.8",
+ "reqwest",
  "rusty_enet",
  "serde",
  "serde_json",

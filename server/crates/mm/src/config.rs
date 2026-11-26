@@ -47,6 +47,12 @@ pub struct Config {
     #[arg(long, env = "MM_UPDATE_FEED_DIR")]
     pub update_feed_dir: Option<std::path::PathBuf>,
 
+    /// EmissaryRecomp's latest release (GitHub's API), read every 5 minutes along with the update
+    /// feed (only with `MM_UPDATE_FEED_DIR`): a recomp is held to the core release of the newest
+    /// recomp release, not to the launcher's newest build. `off` (or empty): to the launcher's.
+    #[arg(long, env = "MM_EMISSARY_RELEASE_URL", default_value = crate::versions::EMISSARY_RELEASE_URL)]
+    pub emissary_release_url: String,
+
     /// Rulesets JSON (stage lists per mode). Defaults to the built-in config/rulesets.json.
     #[arg(long, env = "MM_RULESETS_FILE")]
     pub rulesets_file: Option<String>,
@@ -184,6 +190,10 @@ impl Config {
             min_app_version: self.min_app_version.clone().filter(|s| !s.is_empty()),
             latest_version: self.latest_version.clone().filter(|s| !s.is_empty()),
             update_feed_dir: self.update_feed_dir.clone().filter(|p| !p.as_os_str().is_empty()),
+            emissary_release_url: Some(self.emissary_release_url.trim())
+                .filter(|u| !u.is_empty() && !u.eq_ignore_ascii_case("off"))
+                .filter(|_| self.update_feed_dir.as_ref().is_some_and(|p| !p.as_os_str().is_empty()))
+                .map(str::to_string),
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
             regions: RegionMap::load(self.regions_file.as_deref())?,
             region_widen: Duration::from_secs(self.region_widen_secs),
@@ -231,6 +241,7 @@ impl Config {
             min_app_version: None,
             latest_version: None,
             update_feed_dir: None,
+            emissary_release_url: String::new(),
             rulesets_file: None,
             regions_file: None,
             region_widen_secs: 30,

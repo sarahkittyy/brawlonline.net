@@ -196,6 +196,10 @@ pub fn start_with_ipv6(
     rt.spawn(watch_accounts(pool.clone(), accounts_tx));
     let (restored_tx, restored_rx) = std_mpsc::channel::<Vec<db::RecentMatch>>();
     rt.spawn(restore_matches(pool.clone(), engine_cfg.live.match_ttl, restored_tx));
+    let (emissary_tx, emissary_rx) = std_mpsc::channel::<Vec<(&'static str, String)>>();
+    if let Some(url) = engine_cfg.emissary_release_url.clone() {
+        rt.spawn(watch_emissary_release(url, emissary_tx));
+    }
     let (rooms_tx, rooms_rx) = std_mpsc::channel::<Option<serde_json::Value>>();
     rt.spawn(take_saved_rooms(pool.clone(), rooms_tx));
     let fetch_pool = pool.clone();
@@ -235,6 +239,7 @@ pub fn start_with_ipv6(
             accounts: accounts_rx,
             restored: restored_rx,
             saved_rooms: rooms_rx,
+            emissary_release: emissary_rx,
         };
         event_loop(host, probe6, engine, db, inputs, stop2, keep_rooms2, status)
     })?;
@@ -801,6 +806,61 @@ struct LoopInputs {
     accounts: std_mpsc::Receiver<Vec<db::MmUser>>,
     restored: std_mpsc::Receiver<Vec<db::RecentMatch>>,
     saved_rooms: std_mpsc::Receiver<Option<serde_json::Value>>,
+    emissary_release: std_mpsc::Receiver<Vec<(&'static str, String)>>,
+}
+
+/// How often EmissaryRecomp's latest release is read (GitHub allows 60 unauthenticated API calls an
+/// hour per address), and again after a failure.
+const EMISSARY_RELEASE_EVERY: Duration = Duration::from_secs(300);
+const EMISSARY_RELEASE_RETRY: Duration = Duration::from_secs(60);
+
+/// Reads EmissaryRecomp's latest release (`url`, GitHub's `/releases/latest`) and its
+/// manifest.json: the core release per platform it has a download for
+/// ([`crate::versions::emissary_release_platforms`]), sent to the loop after each read.
+async fn watch_emissary_release(url: String, tx: std_mpsc::Sender<Vec<(&'static str, String)>>) {
+    let client = match reqwest::Client::builder().user_agent("brawl-online-mm").timeout(Duration::from_secs(20)).build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("EmissaryRecomp release check off: {e}");
+            return;
+        }
+    };
+    loop {
+        let wait = match read_emissary_release(&client, &url).await {
+            Ok(pairs) => {
+                if tx.send(pairs).is_err() {
+                    return;
+                }
+                EMISSARY_RELEASE_EVERY
+            }
+            Err(e) => {
+                tracing::warn!(%url, "EmissaryRecomp's latest release unread: {e}");
+                EMISSARY_RELEASE_RETRY
+            }
+        };
+        tokio::time::sleep(wait).await;
+    }
+}
+
+async fn read_emissary_release(client: &reqwest::Client, url: &str) -> anyhow::Result<Vec<(&'static str, String)>> {
+    let release: serde_json::Value = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let Some((manifest_url, platforms)) = crate::versions::emissary_release_platforms(&release) else {
+        return Ok(vec![]);
+    };
+    let bytes = client.get(&manifest_url).send().await?.error_for_status()?.bytes().await?;
+    anyhow::ensure!(bytes.len() <= 64 * 1024, "manifest.json is {} bytes", bytes.len());
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let version = crate::versions::emissary_manifest_version(&manifest)
+        .ok_or_else(|| anyhow::anyhow!("manifest.json names no brawlOnline version"))?;
+    Ok(platforms.into_iter().map(|p| (p, version.clone())).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -814,7 +874,7 @@ fn event_loop(
     keep_rooms: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
-    let LoopInputs { done, rulesets, ruleset_lists, accounts, restored, saved_rooms } = inputs;
+    let LoopInputs { done, rulesets, ruleset_lists, accounts, restored, saved_rooms, emissary_release } = inputs;
     // The last mm's rooms first: their members' games join them again as soon as they connect.
     match saved_rooms.recv_timeout(SAVED_ROOMS_WAIT) {
         Ok(Some(rooms)) => {
@@ -884,6 +944,9 @@ fn event_loop(
         while let Ok(rows) = restored.try_recv() {
             busy = true;
             lp.feed(Input::MatchesRestored(rows));
+        }
+        while let Ok(pairs) = emissary_release.try_recv() {
+            lp.engine.set_emissary_release(pairs);
         }
         if lp.run_pending_disconnects(Instant::now()) {
             busy = true;

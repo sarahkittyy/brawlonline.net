@@ -203,6 +203,10 @@ pub struct EngineConfig {
     /// published build is refused (`hello`, tickets, a room's ready), read again every
     /// [`FEED_REFRESH`].
     pub update_feed_dir: Option<PathBuf>,
+    /// EmissaryRecomp's latest release on GitHub (`versions::EMISSARY_RELEASE_URL`), read with
+    /// `update_feed_dir` only: the recomp feed of the platforms without a `latest-emissary*.yml`
+    /// ([`Engine::set_emissary_release`]). None: recomps are held to the Dolphin feeds.
+    pub emissary_release_url: Option<String>,
     pub rulesets: Rulesets,
     /// Region of a ticket's source address (Unranked buckets).
     pub regions: RegionMap,
@@ -283,6 +287,7 @@ impl Default for EngineConfig {
             min_app_version: None,
             latest_version: None,
             update_feed_dir: None,
+            emissary_release_url: None,
             rulesets: Rulesets::default(),
             regions: RegionMap::default(),
             region_widen: Duration::from_secs(30),
@@ -795,7 +800,12 @@ pub struct Engine {
     match_counter: u64,
     /// The newest build of each platform (`update_feed_dir`), and when it was read.
     feed: FeedVersions,
+    /// The feed files as read, before the recomp release is added to them.
+    feed_files: FeedVersions,
     feed_read: Option<Instant>,
+    /// The recomp's latest release (`emissary_release_url`): its core release per platform with a
+    /// download. None until it is first read.
+    emissary_release: Option<Vec<(&'static str, String)>>,
     geoip_read: Option<Instant>,
 }
 
@@ -932,7 +942,9 @@ impl Engine {
             next_seq: 1,
             match_counter: 0,
             feed: FeedVersions::default(),
+            feed_files: FeedVersions::default(),
             feed_read: None,
+            emissary_release: None,
             geoip_read: None,
         }
     }
@@ -977,6 +989,27 @@ impl Engine {
 
     /// Replaces the newest build of each platform (what reading `update_feed_dir` gives).
     pub fn set_feed_versions(&mut self, feed: FeedVersions) {
+        self.feed_files = feed;
+        self.merge_feed();
+    }
+
+    /// The recomp's latest release (`emissary_release_url`): the Brawl Online release of its core
+    /// for each platform it has a download for, empty for a release without a manifest. A recomp
+    /// of a platform there is held to it instead of that platform's Dolphin feed.
+    pub fn set_emissary_release(&mut self, pairs: Vec<(&'static str, String)>) {
+        if self.emissary_release.as_ref() != Some(&pairs) {
+            let named: Vec<String> = pairs.iter().map(|(p, v)| format!("{p} {v}")).collect();
+            tracing::info!(release = %named.join(", "), "EmissaryRecomp's latest release");
+        }
+        self.emissary_release = Some(pairs);
+        self.merge_feed();
+    }
+
+    fn merge_feed(&mut self) {
+        let mut feed = self.feed_files.clone();
+        if let Some(pairs) = &self.emissary_release {
+            feed = feed.with_emissary_release(pairs);
+        }
         if feed != self.feed {
             tracing::info!(%feed, "newest client builds");
         }
@@ -1005,7 +1038,14 @@ impl Engine {
     /// `min_app_version`.
     fn outdated(&self, client: &ClientBuild) -> Option<String> {
         let have = parse_version(&client.app_version);
-        let required = self.feed.required(&client.engine, &client.platform, &client.app_version);
+        // Until the recomp's release is first read (mm just started), a recomp is not held to the
+        // Dolphin feed, which a launcher release moves past every recomp build.
+        let release_unread = self.cfg.emissary_release_url.is_some() && self.emissary_release.is_none();
+        let required = if release_unread && client.engine == common::client_engine::EMISSARY {
+            None
+        } else {
+            self.feed.required(&client.engine, &client.platform, &client.app_version)
+        };
         if let Some(f) = required.filter(|f| have < parse_version(f)) {
             return Some(f.to_string());
         }
@@ -5227,6 +5267,45 @@ mod tests {
         v["appVersion"] = json!("3.5.0");
         let out = h.raw(8, v.to_string().as_bytes());
         assert_eq!(sent(&out, 8), vec![json!({"type": "create-ticket-resp"})]);
+    }
+
+    /// With the recomp's GitHub release read (production): before its first answer a recomp is not
+    /// held to the launcher's feed; after it, to the release's core, whatever the launcher's newest
+    /// build is, so a launcher release leaves an unchanged recomp playing.
+    #[test]
+    fn a_recomp_is_held_to_the_newest_recomp_release() {
+        let mut h = Harness::new(EngineConfig {
+            emissary_release_url: Some("https://example.invalid/releases/latest".into()),
+            ..Default::default()
+        });
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.6.0"), ("mac", "3.6.0")]));
+        let users: Vec<MmUser> =
+            (b'A'..b'E').map(|c| user(&format!("R{}#1", c as char), &format!("r{}", c as char))).collect();
+        for u in &users {
+            h.add(u);
+        }
+        let hello = |h: &mut Harness, conn: ConnId, u: &MmUser, version: &str, engine: &str| {
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": version, "platform": "win", "engine": engine, "engineVersion": "0.7.0",
+            });
+            h.connect(conn, conn as u16);
+            h.raw(conn, v.to_string().as_bytes())
+        };
+        // mm just started: the release is not read yet.
+        let out = hello(&mut h, 1, &users[0], "3.5.0", "emissary");
+        assert!(sent(&out, 1)[0].get("error").is_none(), "{:?}", sent(&out, 1));
+        let out = hello(&mut h, 2, &users[1], "3.5.0", "dolphin");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::update_to("3.6.0"));
+        // The latest recomp release has the 3.5.0 core for Windows: a launcher feed of 3.6.0 (or
+        // more, read again) does not refuse it; an older recomp is told to update to 3.5.0.
+        h.e.set_emissary_release(vec![("win", "3.5.0".into())]);
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.7.0"), ("mac", "3.6.0")]));
+        let out = hello(&mut h, 3, &users[2], "3.5.0", "emissary");
+        assert!(sent(&out, 3)[0].get("error").is_none(), "{:?}", sent(&out, 3));
+        let out = hello(&mut h, 4, &users[3], "3.4.0", "emissary");
+        assert_eq!(sent(&out, 4)[0]["error"], msg::update_to("3.5.0"));
     }
 
     #[test]
