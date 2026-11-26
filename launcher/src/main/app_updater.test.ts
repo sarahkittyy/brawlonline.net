@@ -328,10 +328,10 @@ describe("describeInstallerLog", () => {
   });
 
   it("keeps the end of a long log", () => {
-    writeFileSync(path.join(dir, INSTALLER_LOG_FILE), `${"x".repeat(10000)}the end`);
+    writeFileSync(path.join(dir, INSTALLER_LOG_FILE), `${"x".repeat(20000)}the end`);
     const text = describeInstallerLog(dir);
     expect(text.endsWith("the end")).toBe(true);
-    expect(text.length).toBeLessThan(4200);
+    expect(text.length).toBeLessThan(8200);
   });
 
   it("says so when the installer left none", () => {

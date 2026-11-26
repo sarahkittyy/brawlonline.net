@@ -258,6 +258,70 @@ var StartMenuShortcutCheckbox
   Sleep 1000
 !macroend
 
+; Removes the line breaks at the start and the end of VAR (a command's output); "none" if nothing is
+; left. Uses $R9.
+!macro trimLineEnds VAR
+  ${Do}
+    StrCpy $R9 ${VAR} 1 -1
+    ${If} $R9 == "$\r"
+    ${OrIf} $R9 == "$\n"
+      StrCpy ${VAR} ${VAR} -1
+    ${Else}
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  ${Do}
+    StrCpy $R9 ${VAR} 1
+    ${If} $R9 == "$\r"
+    ${OrIf} $R9 == "$\n"
+      StrCpy ${VAR} ${VAR} "" 1
+    ${Else}
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  ${If} ${VAR} == ""
+    StrCpy ${VAR} "none"
+  ${EndIf}
+!macroend
+
+; killLauncher, with what taskkill said in the update's log: each process it ended (its PID) or why
+; it could not ("Access is denied" for one run as administrator). Bug report #357: the installer
+; force-closed a launcher 19 times in 30 s and still saw one, and its log could not say why.
+!macro killLauncherLogged
+  Push $0
+  Push $1
+  Push $R9
+  nsExec::ExecToStack `"$SYSDIR\cmd.exe" /C taskkill /F /IM "${APP_EXECUTABLE_FILENAME}" /FI "USERNAME eq %USERNAME%" 2>&1`
+  Pop $0
+  Pop $1
+  !insertmacro trimLineEnds $1
+  !insertmacro updateLog "taskkill exited with $0: $1"
+  Pop $R9
+  Pop $1
+  Pop $0
+  Sleep 1000
+!macroend
+
+; Writes the launcher's processes that are running to the update's log, one line each: its PID, what
+; it is (main for the launcher itself, else Electron's process type: gpu-process, renderer,
+; utility, crashpad-handler), its parent's PID, when it started and the file it runs. Windows hides
+; the command line and the file of a process run as administrator (or by another user): that one
+; says unreadable. A PID that changes between the lines of killLauncherLogged and these is a
+; launcher started again; one that stays is one that does not end.
+!macro logLaunchers
+  Push $0
+  Push $1
+  Push $R9
+  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter 'Name=''${APP_EXECUTABLE_FILENAME}''' | ForEach-Object { $$c = $$_.CommandLine; $$t = if (-not $$c) { 'unreadable' } elseif ($$c -match '--type=(\S+)') { $$matches[1] } else { 'main' }; $$p = $$_.ExecutablePath; if (-not $$p) { $$p = 'unreadable' }; '{0} {1}, parent {2}, started {3:MM-dd HH:mm:ss}, {4}' -f $$_.ProcessId, $$t, $$_.ParentProcessId, $$_.CreationDate, $$p }"`
+  Pop $0
+  Pop $1
+  !insertmacro trimLineEnds $1
+  !insertmacro updateLog "the launcher's processes (PowerShell exited with $0): $1"
+  Pop $R9
+  Pop $1
+  Pop $0
+!macroend
+
 ; Sets VAR to 1 while this user runs a launcher (from any folder), else 0.
 !macro launcherRunning VAR
   nsExec::Exec `"$SYSDIR\cmd.exe" /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${APP_EXECUTABLE_FILENAME}\""`
@@ -293,6 +357,7 @@ var StartMenuShortcutCheckbox
           Quit
         ${EndIf}
       ${ElseIf} $R1 > 20
+        !insertmacro logLaunchers
         MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY customCheckAppRunning_retry
         !insertmacro updateLog "the launcher could not be closed: stopped"
         Quit
@@ -301,7 +366,14 @@ var StartMenuShortcutCheckbox
       ${Else}
         DetailPrint "$(appClosing)"
         !insertmacro updateLog "the launcher is still open: closing it"
-        !insertmacro killLauncher
+        ; The first and the last force-close say what taskkill did; the others are as short as
+        ; before (the launcher copies only the log's end into main.log).
+        ${If} $R1 == 2
+        ${OrIf} $R1 == 20
+          !insertmacro killLauncherLogged
+        ${Else}
+          !insertmacro killLauncher
+        ${EndIf}
       ${EndIf}
       Goto customCheckAppRunning_loop
     ${EndIf}

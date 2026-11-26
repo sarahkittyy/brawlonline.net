@@ -44,8 +44,8 @@ export const DOWNLOAD_RETRY_DELAYS_MS = [5 * 1000, 30 * 1000, 2 * 60 * 1000];
  * (bug report #280: five failed updates in a row, cause unknown).
  */
 export const INSTALLER_LOG_FILE = `${PRODUCT_NAME} update.log`;
-/** At most this much of its end goes into main.log. */
-const INSTALLER_LOG_MAX_CHARS = 4000;
+/** At most this much of its end goes into main.log (a launcher that would not close logs about 4000: #357). */
+const INSTALLER_LOG_MAX_CHARS = 8000;
 
 /** What the installer's log in `dir` says, for main.log. */
 export function describeInstallerLog(dir: string = os.tmpdir()): string {
