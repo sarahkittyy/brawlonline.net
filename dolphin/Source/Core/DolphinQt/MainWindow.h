@@ -110,11 +110,12 @@ private:
   void Pause();
   void TogglePause();
 
-  // May ask for confirmation. Returns whether or not it actually stopped.
-  bool RequestStop();
+  // Asks first (Confirm on Stop) only if `ask`: a person stopped it (Esc, Stop, a window's
+  // close). A stop the game or the launcher asked for goes on. Returns whether it stopped.
+  bool RequestStop(bool ask = false);
   void ForceStop();
   // Stop with the reason in the log.
-  void RequestStopFor(std::string_view why);
+  void RequestStopFor(std::string_view why, bool ask = false);
   void ForceStopFor(std::string_view why);
   void OnRenderWidgetClosed();
   void Reset();

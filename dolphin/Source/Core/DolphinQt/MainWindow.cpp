@@ -639,7 +639,7 @@ void MainWindow::ConnectMenuBar()
   // Emulation
   connect(m_menu_bar, &MenuBar::Pause, this, &MainWindow::Pause);
   connect(m_menu_bar, &MenuBar::Play, this, [this] { Play(); });
-  connect(m_menu_bar, &MenuBar::Stop, this, [this] { RequestStopFor("Emulation > Stop"); });
+  connect(m_menu_bar, &MenuBar::Stop, this, [this] { RequestStopFor("Emulation > Stop", true); });
   connect(m_menu_bar, &MenuBar::Reset, this, &MainWindow::Reset);
   connect(m_menu_bar, &MenuBar::Fullscreen, this, &MainWindow::FullScreen);
   connect(m_menu_bar, &MenuBar::FrameAdvance, this, &MainWindow::FrameAdvance);
@@ -729,7 +729,7 @@ void MainWindow::ConnectHotkeys()
   connect(m_hotkey_scheduler, &HotkeyScheduler::RefreshGameListHotkey, this,
           &MainWindow::RefreshGameList);
   connect(m_hotkey_scheduler, &HotkeyScheduler::StopHotkey, this,
-          [this] { RequestStopFor("the Stop hotkey"); });
+          [this] { RequestStopFor("the Stop hotkey", true); });
   connect(m_hotkey_scheduler, &HotkeyScheduler::ResetHotkey, this, &MainWindow::Reset);
   connect(m_hotkey_scheduler, &HotkeyScheduler::ScreenShotHotkey, this, &MainWindow::ScreenShot);
   connect(m_hotkey_scheduler, &HotkeyScheduler::FullScreenHotkey, this, &MainWindow::FullScreen);
@@ -801,7 +801,8 @@ void MainWindow::ConnectToolBar()
 
   connect(m_tool_bar, &ToolBar::PlayPressed, this, [this] { Play(); });
   connect(m_tool_bar, &ToolBar::PausePressed, this, &MainWindow::Pause);
-  connect(m_tool_bar, &ToolBar::StopPressed, this, [this] { RequestStopFor("the toolbar's Stop"); });
+  connect(m_tool_bar, &ToolBar::StopPressed, this,
+          [this] { RequestStopFor("the toolbar's Stop", true); });
   connect(m_tool_bar, &ToolBar::FullScreenPressed, this, &MainWindow::FullScreen);
   connect(m_tool_bar, &ToolBar::ScreenShotPressed, this, &MainWindow::ScreenShot);
   connect(m_tool_bar, &ToolBar::NetPlaySetupDialogPressed, this, &MainWindow::ShowNetPlaySetupDialog);
@@ -1069,7 +1070,7 @@ void MainWindow::OnStopComplete()
   }
 }
 
-bool MainWindow::RequestStop()
+bool MainWindow::RequestStop(bool ask)
 {
   if (Core::IsUninitialized(m_system))
   {
@@ -1090,7 +1091,11 @@ bool MainWindow::RequestStop()
   else
     FullScreen();
 
-  bool confirm_on_stop = Config::Get(Config::MAIN_CONFIRM_ON_STOP);
+  // Brawl Online: an Esc or a click that would end the game asks first, so a stray Esc isn't
+  // taken for a crash (staging 2026-11-25: the game "crashed" = the Stop hotkey). Not in the
+  // playback Dolphin, where closing a replay's window is how a replay ends.
+  bool confirm_on_stop =
+      ask && Config::Get(Config::MAIN_CONFIRM_ON_STOP) && !Gprb::Replay::Playback::Following();
 #ifdef RC_CLIENT_SUPPORTS_RAINTEGRATION
   confirm_on_stop = confirm_on_stop || AchievementManager::GetInstance().CheckForModifications();
 #endif  // RC_CLIENT_SUPPORTS_RAINTEGRATION
@@ -1103,8 +1108,9 @@ bool MainWindow::RequestStop()
 
     const Core::State state = Core::GetState(m_system);
 
-    // Only pause the game, if NetPlay is not running
-    bool pause = !Settings::Instance().GetNetPlayClient();
+    // Only pause the game, if NetPlay is not running. Nor in Brawl Online's Dolphin (an online
+    // session backend is registered): a paused game stalls the other players and the room.
+    bool pause = !Settings::Instance().GetNetPlayClient() && !Online::Session::HasBackend();
 
     if (pause)
       Core::SetState(m_system, Core::State::Paused);
@@ -1209,10 +1215,10 @@ static void LogStopReason(Core::System& system, std::string_view why)
     NOTICE_LOG_FMT(CORE, "Stopping the game: {}", why);
 }
 
-void MainWindow::RequestStopFor(std::string_view why)
+void MainWindow::RequestStopFor(std::string_view why, bool ask)
 {
   LogStopReason(m_system, why);
-  RequestStop();
+  RequestStop(ask);
 }
 
 void MainWindow::ForceStopFor(std::string_view why)
@@ -2012,7 +2018,7 @@ bool MainWindow::eventFilter(QObject* object, QEvent* event)
   {
     LogStopReason(m_system, object == this ? "the main window was closed" :
                                              "the game window was closed");
-    if (RequestStop() && object == this)
+    if (RequestStop(true) && object == this)
       m_exit_requested = true;
 
     static_cast<QCloseEvent*>(event)->ignore();
