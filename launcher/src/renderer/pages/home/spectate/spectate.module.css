@@ -5,7 +5,10 @@
   overflow: hidden;
 }
 
-/* Wider than 1200px the columns would drift apart: the list stays 1200px wide, centered. */
+/* Wider than 1200px the columns would drift apart: the list stays 1200px wide, centered. Clipped 3px out from its
+   edges, not at them: the Twitch row's cards reach 3px past the page's left edge for their hover outline (.twitchCards),
+   and clipped at the edge the first card's outline lost its left side (Sarah's board: "left highlight edge is cut
+   off"). The page's 20px padding has room for it. */
 .block {
   --live-red: #e5534b;
 
@@ -14,7 +17,8 @@
   margin: 0 auto;
   min-height: 0;
   height: 100%;
-  overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: 3px;
   display: flex;
   flex-direction: column;
 }
