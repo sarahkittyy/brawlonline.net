@@ -41,6 +41,8 @@ without Twitch (the typed handle, or the name, becomes the account).
 - **Spectate:** a Twitch row at the top, above the featured game, only while there are streams; cards most
   viewers first; "(logo) Twitch" on the left and Connect account on the right for a player who hasn't connected.
   The logo after live players' names in the list and the featured game. The featured game is a little smaller.
+  A card's picture and title open the stream; the player's name under the picture is a name as anywhere else
+  (hover card, profile on a click, player menu on a right click), so the card itself is no button.
 - **Sidebar:** Twitch's logo before Spectate's live count while there are streams (not when folded).
 - **Connect account** is also in Settings > Social ("Twitch", then Connect account or the account and Disconnect,
   as the other settings' small outlined buttons) and in the profile's edit mode, where the Twitch row keeps the

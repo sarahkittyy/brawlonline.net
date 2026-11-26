@@ -180,9 +180,11 @@ button.panel:focus-visible {
   font-size: 12px;
 }
 
-/* Spectate's Twitch row. align-items: stretch is not the default here: in the launcher's Electron (Chromium 132) a
-   <button>'s flex items are as wide as their content, so a long title was wider than its card, never ellipsized,
-   and ran into the next card's (newer Chrome stretches them). */
+/* Spectate's Twitch row: a card of the stream's picture, the player's name (a name as anywhere: hover card, profile,
+   player menu) and the title. The picture and the title are the stream's buttons. align-items: stretch is not the
+   default for a <button>'s flex items in the launcher's Electron (Chromium 132): they are as wide as their content, so
+   a long title was wider than its card, never ellipsized, and ran into the next card's (newer Chrome stretches them).
+   The card is no button now, but its children stretch the same. */
 .card {
   display: flex;
   flex-direction: column;
@@ -190,18 +192,27 @@ button.panel:focus-visible {
   gap: 4px;
   flex: 0 1 168px;
   min-width: 128px;
+  color: var(--text-primary, #fff);
+}
+
+.streamLink {
+  display: block;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: none;
-  color: var(--text-primary, #fff);
+  color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+.streamLink:focus-visible {
+  outline: none;
+}
+
 .cardPicture {
   position: relative;
-  display: block;
   line-height: 0;
   border-radius: 6px;
   outline: 2px solid transparent;
@@ -209,13 +220,10 @@ button.panel:focus-visible {
   transition: outline-color 0.12s;
 }
 
-.card:hover .cardPicture,
-.card:focus-visible .cardPicture {
+/* Lit by either of the stream's buttons, not by the name (that one is the player's). */
+.card:has(.streamLink:hover) .cardPicture,
+.cardPicture:focus-visible {
   outline-color: #9146ff;
-}
-
-.card:focus-visible {
-  outline: none;
 }
 
 .cardPicture img {
@@ -251,14 +259,10 @@ button.panel:focus-visible {
   font-weight: 700;
 }
 
-.cardNameText,
 .cardTitle {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.cardTitle {
   color: var(--text-secondary);
   font-size: 11px;
 }

@@ -114,8 +114,11 @@ describe("SpectateView", () => {
     const row = screen.getByTestId("twitch-row");
     expect(row.textContent).toContain("Twitch");
     expect(screen.getByText("connect")).toBeTruthy();
-    const cards = screen.getAllByTestId("twitch-card");
+    const cards = screen.getAllByTestId("twitch-card-stream");
     expect(cards.map((c) => c.getAttribute("title"))).toEqual(["Twitch: @aaaaaaaaaaaa-b_tv", "Twitch: @zed_tv"]);
+    // The player's name under a stream is a name as anywhere: it opens their profile.
+    const names = document.querySelectorAll('[data-testid="twitch-card"] [data-profile-link]');
+    expect(Array.from(names, (n) => n.getAttribute("data-profile-link"))).toEqual(["aaaaaaaaaaaa-b", "zed"]);
     // bob of the first game is live: one logo beside his name; nobody else's.
     const marks = document.querySelectorAll('[data-stream="aaaaaaaaaaaa"] [data-testid="twitch-live"]');
     expect(marks.length).toBe(1);

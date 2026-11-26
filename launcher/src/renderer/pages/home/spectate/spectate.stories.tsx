@@ -1,11 +1,15 @@
 import type { TwitchStream } from "@accounts/types";
 import Button from "@mui/material/Button";
 import type { LiveGameEntry } from "@spectate/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { useState } from "react";
 
 import { TwitchGlyph } from "@/components/twitch/twitch";
 import { TwitchMessages } from "@/components/twitch/twitch.messages";
 import twitchStyles from "@/components/twitch/twitch.module.css";
+import { createServiceProvider } from "@/services";
+import type { BackendService, PlayerProfile } from "@/services/backend/types";
+import type { Services } from "@/services/types";
 
 import styles from "./spectate.module.css";
 import type { SpectateListState, SpectateViewProps } from "./spectate_view";
@@ -90,10 +94,42 @@ const mockGames: LiveGameEntry[] = [
   },
 ];
 
+/** Any name's hover card: a placed player who mains Fox. */
+const profile = (uid: string): PlayerProfile => ({
+  uid,
+  displayName: uid,
+  connectCode: "PLAY#1",
+  link: null,
+  ranked: {
+    rank: { tier: "gold", division: 2 },
+    rating: 1523,
+    setsPlayed: 54,
+    setsToPlace: 0,
+    wins: 34,
+    losses: 20,
+    position: 12,
+    rankedPlayers: 340,
+  },
+  mains: ["fox"],
+  country: "se",
+  socials: [],
+});
+const { ServiceProvider } = createServiceProvider({
+  services: {
+    backendService: { fetchProfile: async (uid: string) => profile(uid) } as Partial<BackendService> as BackendService,
+  } as Services,
+});
+const queryClient = new QueryClient();
+
+/** The page, with what the players' hover cards read. */
 const Frame = ({ children }: { children: React.ReactNode }) => (
-  <div className={styles.page} style={{ height: "100vh", width: "100vw" }}>
-    {children}
-  </div>
+  <QueryClientProvider client={queryClient}>
+    <ServiceProvider>
+      <div className={styles.page} style={{ height: "100vh", width: "100vw" }}>
+        {children}
+      </div>
+    </ServiceProvider>
+  </QueryClientProvider>
 );
 
 const props = (state: SpectateListState, extra: Partial<SpectateViewProps> = {}): SpectateViewProps => ({

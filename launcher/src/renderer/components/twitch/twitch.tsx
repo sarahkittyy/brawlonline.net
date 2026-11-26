@@ -7,6 +7,7 @@ import { clsx } from "clsx";
 
 import { CharacterIcon } from "@/components/profile/character_icon";
 import { SOCIAL_ICON_PATHS } from "@/components/profile/social_icons";
+import { UserName } from "@/components/user_name/user_name";
 import { openTwitch, useTwitchActions, useTwitchLink } from "@/lib/twitch/use_twitch";
 
 import { TwitchMessages as Messages } from "./twitch.messages";
@@ -113,31 +114,54 @@ export const TwitchStreamPanel = ({ stream, size }: { stream: TwitchStream; size
   );
 };
 
-/** Spectate's Twitch row: one stream, its picture over the player and the title. Opens the stream. */
-export const TwitchStreamCard = ({ stream }: { stream: TwitchStream }) => (
-  <button
-    type="button"
-    className={styles.card}
-    onClick={() => openTwitch(stream.login)}
-    title={Messages.account(stream.login)}
-    data-testid="twitch-card"
-  >
-    <span className={styles.cardPicture}>
-      <img src={stream.thumbnail} alt="" draggable={false} />
-      <Viewers viewers={stream.viewers} />
-      <span className={styles.cardLogo}>
-        <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden={true} focusable={false}>
-          <path d={SOCIAL_ICON_PATHS.twitch} />
-        </svg>
+/**
+ * Spectate's Twitch row: one stream, its picture over the player and the title. The picture and the title open the
+ * stream; the player's name is a name as anywhere else (Sarah's board: "the profile names should be hoverable /
+ * clickable / right clickable under the twitch streams"): their hover card, their profile on a click, the player menu
+ * on a right click. The card is no button then, as a button can't hold the name's.
+ */
+export const TwitchStreamCard = ({ stream }: { stream: TwitchStream }) => {
+  const label = Messages.account(stream.login);
+  const open = () => openTwitch(stream.login);
+  return (
+    <div className={styles.card} data-testid="twitch-card">
+      <button
+        type="button"
+        className={clsx(styles.streamLink, styles.cardPicture)}
+        onClick={open}
+        title={label}
+        aria-label={label}
+        data-testid="twitch-card-stream"
+      >
+        <img src={stream.thumbnail} alt="" draggable={false} />
+        <Viewers viewers={stream.viewers} />
+        <span className={styles.cardLogo}>
+          <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden={true} focusable={false}>
+            <path d={SOCIAL_ICON_PATHS.twitch} />
+          </svg>
+        </span>
+      </button>
+      <span className={styles.cardName}>
+        {stream.main && <CharacterIcon character={stream.main} size={16} />}
+        <UserName
+          user={{ uid: stream.uid, displayName: stream.displayName, connectCode: stream.connectCode ?? undefined }}
+          showCode={false}
+          profileLink={true}
+        />
       </span>
-    </span>
-    <span className={styles.cardName}>
-      {stream.main && <CharacterIcon character={stream.main} size={16} />}
-      <span className={styles.cardNameText}>{stream.displayName}</span>
-    </span>
-    <span className={styles.cardTitle}>{stream.title}</span>
-  </button>
-);
+      {/* The picture's twin for the mouse: one stop for the keyboard. */}
+      <button
+        type="button"
+        className={clsx(styles.streamLink, styles.cardTitle)}
+        onClick={open}
+        title={label}
+        tabIndex={-1}
+      >
+        {stream.title}
+      </button>
+    </div>
+  );
+};
 
 /**
  * Connect account: opens Twitch's sign-in in the browser; spins until the account is connected (or the wait runs out).
