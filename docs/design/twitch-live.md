@@ -28,7 +28,7 @@ connected accounts seen playing in the last 10 minutes are live (the 10 minutes 
 
 Without `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` it is all off: no streams, connecting answers 503 and the
 launcher shows no Connect account. A staging server with `STAGING_FAKE_STATE` lists the file's `twitch` streams
-(`tools/staging/seed_fake.py`: Veka, Knuckles, MayoTayo1, their live game's stage as the picture) and connects
+(`tools/staging/seed_fake.py`: Marlo, Knuckles, MayoTayo1, their live game's stage as the picture) and connects
 without Twitch (the typed handle, or the name, becomes the account).
 
 ## Where it shows (Sarah's picks)

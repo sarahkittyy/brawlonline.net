@@ -107,7 +107,7 @@ BRAWL_DISC = "a56ffa9437ddf80f4e4fa9c9bfddc7094d216483"  # launcher/src/dolphin/
 ROSTER = [
     ("sosa", "SOSA#160", ["jigglypuff", "marth"], "us", 2390, 9, {"twitter": "sosa_pm", "twitch": "sosapm"}),
     ("The Doctor", "TDOC#795", ["mario"], "us", 2335, 9, {"youtube": "@thedoctorpm"}),
-    ("Veka", "VEKA#31", ["marth", "roy"], "fr", 2285, 8, {}),
+    ("Marlo", "MRLO#31", ["marth", "roy"], "fr", 2285, 8, {}),
     ("CerealKiD69", "PEE#590", ["wolf"], "", 2170, 8, {"discord": "cerealkid"}),
     ("Cloudburst", "AZPM#187", ["squirtle", "ivysaur", "charizard"], "us", 2120, 8, {"twitch": "cloudburstpm"}),
     ("SorryInAdvance", "MASH#952", ["ice_climbers"], "ca", 2080, 7, {}),
@@ -180,7 +180,7 @@ ROOMS = [
 # Live games: (mode, players, game number, set score, stage, state, seconds into the game, spectators)
 LIVE = [
     ("ranked", ["sosa", "The Doctor"], 3, (1, 1), 0x2E, "playing", 161, 14),
-    ("ranked", ["Veka", "Cloudburst"], 1, (0, 0), 0x01, "playing", 58, 6),
+    ("ranked", ["Marlo", "Cloudburst"], 1, (0, 0), 0x01, "playing", 58, 6),
     ("direct", ["Knuckles", "E-C"], 2, (1, 0), 0x21, "playing", 76, 3),
     ("unranked", ["iPunch", "MayoTayo1"], 4, (2, 1), 0x23, "playing", 37, 2),
     ("room", ["Ferrum", "tetrahedra"], 1, (0, 0), 0x2D, "playing", 112, 1),
@@ -191,7 +191,7 @@ IN_LAUNCHER = ["Lucas", "Mr. Mario", "tomato"]
 # Live Twitch streams (GET /v1/twitch/streams): (player, Twitch login, title, Twitch category, viewers,
 # minutes live). The picture is the stage of the player's live game, from the launcher's own cache.
 TWITCH = [
-    ("Veka", "veka_ssb", "road to master 1", "Super Smash Bros. Brawl", 41, 95),
+    ("Marlo", "marlo_ssb", "road to master 1", "Super Smash Bros. Brawl", 41, 95),
     ("Knuckles", "knuxplays", "brawl online ranked grind | !discord", "Super Smash Bros. Brawl", 23, 40),
     ("MayoTayo1", "mayotayo", "p+ netplay w/ chat", "Super Smash Bros. Melee", 8, 12),
 ]
