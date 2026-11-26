@@ -136,16 +136,21 @@ const Body = styled.div`
 
   img,
   video {
-    display: block;
     max-width: 100%;
     height: auto;
-    margin: 0 auto;
     border-radius: 4px;
   }
 
-  p img {
-    display: inline;
+  /* A picture in a line of text (a paragraph, a heading, a list item, a table cell) sits in the line,
+     like an icon; only a figure's picture (one alone in its paragraph) and a video stand on their own. */
+  img {
     vertical-align: middle;
+  }
+
+  figure img,
+  video {
+    display: block;
+    margin: 0 auto;
   }
 
   figcaption {

@@ -649,7 +649,7 @@ body.blog::after {
   margin: 26px 0;
 }
 
-.prose img,
+.prose figure img,
 .prose video {
   display: block;
   max-width: 100%;
@@ -659,8 +659,10 @@ body.blog::after {
   background: #000;
 }
 
-.prose p img {
-  display: inline-block;
+/* A picture in a line of text (a paragraph, a heading, a list item): an icon in the line, as it is. */
+.prose img {
+  max-width: 100%;
+  height: auto;
   vertical-align: middle;
 }
 
