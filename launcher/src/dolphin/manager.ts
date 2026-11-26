@@ -357,6 +357,17 @@ export class DolphinManager {
   }
 
   /**
+   * Why another game can't start while the netplay game stays open: it names EmissaryRecomp when
+   * that is what is open (Sarah's board: Play pressed with the recomp open said "Dolphin is already
+   * open"). The recomp has no window without its game, so it is just "open".
+   */
+  netplayOpenMessage(): string {
+    return this.isEmissaryRunning()
+      ? "EmissaryRecomp is already open. Close it first."
+      : "Dolphin is already open with a game. Close it first.";
+  }
+
+  /**
    * Another game (an Other Games room, Project Punch, Dolphin's controller settings for them) is
    * about to start in Dolphin. An open Dolphin closes if it has no game (closeNetplayIfIdle);
    * EmissaryRecomp closes unless its game is busy (a match, a search, a set between its games:
@@ -907,7 +918,7 @@ export class DolphinManager {
       }
       // An open Dolphin without a game closes first (closeNetplayIfIdle).
       if (!(await this.closeNetplayIfIdle())) {
-        throw new Error("Dolphin is already open with a game. Close it first.");
+        throw new Error(this.netplayOpenMessage());
       }
     }
     this._assertNotMoving();
@@ -1122,7 +1133,7 @@ export class DolphinManager {
    * `onClose` runs when it exits.
    */
   async launchModsDolphin(build: ModBuild, room: ModsRoomArg, onClose?: () => void | Promise<void>) {
-    Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
+    Preconditions.checkState(this.netplayDolphinInstance == null, this.netplayOpenMessage());
     await this.launchGate();
     const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
     await this._repairBundledDolphin();
@@ -1198,9 +1209,9 @@ export class DolphinManager {
    */
   async launchProjectPunchDolphin(sdCardImage: string, onClose?: () => void): Promise<void> {
     if (this.netplayDolphinInstance && !(await this.closeNetplayForOtherGame())) {
-      throw new Error("Dolphin is already open with a game. Close it first.");
+      throw new Error(this.netplayOpenMessage());
     }
-    Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
+    Preconditions.checkState(this.netplayDolphinInstance == null, this.netplayOpenMessage());
     this._assertNotMoving();
     await this.launchGate();
     const installation = this.getInstallation(DolphinLaunchType.NETPLAY);

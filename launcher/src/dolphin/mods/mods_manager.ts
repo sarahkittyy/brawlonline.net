@@ -564,7 +564,7 @@ export class ModsManager {
       return;
     }
     if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayForOtherGame())) {
-      throw new Error("Dolphin is already open with a game. Close it first.");
+      throw new Error(this.dolphin.netplayOpenMessage());
     }
     await this.dolphin.configureDolphin(DolphinLaunchType.NETPLAY, {
       extraArgs: ["--controllers"],
@@ -1346,7 +1346,7 @@ export class ModsManager {
     }
     // An open Dolphin without a game (Play's, or Configure's) closes first.
     if (this.dolphin.isNetplayRunning() && !(await this.dolphin.closeNetplayForOtherGame())) {
-      throw new Error("Dolphin is already open with a game. Close it first.");
+      throw new Error(this.dolphin.netplayOpenMessage());
     }
     await this.dolphin.launchModsDolphin(build, room, () => this.onDolphinClosed());
     this.running = true;
