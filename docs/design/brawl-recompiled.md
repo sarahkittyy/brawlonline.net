@@ -578,3 +578,35 @@ portrait in P1's panel.
 
 Not done: the launcher doesn't share the netplay Dolphin's `Load/Textures` with the recomp (as it shares the NAND save),
 so a pack has to be copied into the recomp's `UserData` by hand.
+
+## 25. The sound's output queue keeps a level (bug report #376, 2026-11-27)
+
+"Game audio is choppy in Emissary" (LORD#535, v0.7.4, i7-10700K + RTX 3080, 4.5x, MSAA 4x, anisotropy 16x, Predict
+120, Direct3D 12, 1440p exclusive). The AI's blocks reach the SDL stream at the emulated time's pace, a frame's worth
+at a time. The stream played them at the device's pace with nothing kept ahead and no control of its level, so each
+frame shown late ran the device dry, and the device played hard silence. In the reporter's 19 matches frames came up to
+85 ms late (10 s stretches at 58.5 fps, 14-26 re-anchors a match in one session). Their recomp logged at least 10
+frames a second more than 20 ms apart (Sarah's 9800X3D: about one every few seconds). The queue's average was anywhere
+from 33 to 68 ms (Sarah's PC: 14.5 ms). Bug report #378 adds the other side: after a fall-behind of over 100 ms the
+queue sat at its 120 ms cap for the rest of the match, about 100 ms of sound lag.
+
+The heavy video settings are most of the lateness. Paired recomp-vs-recomp Direct matches over long_haul on this PC
+(two games on one RTX 4070) went from 5% uneven frames at 1x to 32% at the reporter's settings, with 10 s windows of
+up to 156 late frames, and the queue swung from empty to full (19-26 blocks dropped at the cap).
+
+Recomp `brawlonline/audio-buffer` 1085f22 (merged into `brawlonline/windows-build` 7033d5c, local, not pushed, not
+released) does what Dolphin's mixer does with its 80 ms AudioBufferSize. The queue starts filled to a target,
+`WIICOMPILED_AUDIO_BUFFER_MS`, default 60 (0 = the old queue). The stream's frequency ratio follows the queue's level
+averaged over about 0.5 s: faster above the target, slower below, up to 2%. When the device has run dry (its read
+callback found the queue more than 2 ms short), the queue is filled back to the target with silence once, so the next
+late frame finds sound ahead of it. Blocks drop only above 180 ms. The `recomp audio:` line adds `ran dry N times (X ms
+short), refilled X ms, rate [min, max]`.
+
+Paired A/B in one match (one exe, old queue on game-a, new on game-b, 90 s): at 1x the queue average went 26.7 -> 60.5
+ms and it ran dry 9 -> 2 times (124 -> 49 ms short). At the reporter's settings, with both games 2.4 s behind real time,
+the average went 73.9 -> 61.0 ms (no sitting at the cap) and it ran dry 147 -> 34 times. The silence in total is the
+same there: a game that falls behind real time has that much less sound to play. The silence now comes in fewer,
+longer gaps.
+
+Not done: Dolphin fills a gap with its last granules (crossfaded) instead of silence; the recomp still plays silence
+when the game itself is too slow.
