@@ -568,6 +568,25 @@
   margin-bottom: 0;
 }
 
+/* The number of streams after the heading, in Twitch's purple; the heading's push to the right moves to it. */
+.headingBeforeCount {
+  margin-right: 0;
+}
+
+.streamCount {
+  margin-right: auto;
+  min-width: 20px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+  color: #fff;
+  background-color: #9146ff;
+}
+
 /* The arrow left of Twitch's logo (it collapses the row to its heading, and expands it again). */
 .chevron {
   transition: transform 0.15s;

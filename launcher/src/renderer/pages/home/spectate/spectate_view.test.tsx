@@ -105,6 +105,7 @@ describe("SpectateView", () => {
   it("shows the Twitch row's heading and its action without streams", () => {
     view({ kind: "ready", games }, { twitchAction: <button type="button">connect</button> });
     expect(screen.getByTestId("twitch-row").textContent).toBe("Twitchconnect");
+    expect(screen.queryByTestId("twitch-count")).toBeNull();
     expect(screen.queryByTestId("twitch-card")).toBeNull();
   });
 
@@ -118,6 +119,7 @@ describe("SpectateView", () => {
     );
     const row = screen.getByTestId("twitch-row");
     expect(row.textContent).toContain("Twitch");
+    expect(screen.getByTestId("twitch-count").textContent).toBe("2");
     expect(screen.getByText("connect")).toBeTruthy();
     const cards = screen.getAllByTestId("twitch-card-stream");
     expect(cards.map((c) => c.getAttribute("title"))).toEqual(["Twitch: @aaaaaaaaaaaa-b_tv", "Twitch: @zed_tv"]);
@@ -141,7 +143,8 @@ describe("SpectateView", () => {
         onTwitchCollapsedChange: onCollapsed,
       },
     );
-    expect(screen.getByTestId("twitch-row").textContent).toBe("Twitch");
+    // The heading keeps how many are live.
+    expect(screen.getByTestId("twitch-row").textContent).toBe("Twitch1");
     expect(screen.queryByTestId("twitch-card")).toBeNull();
     expect(screen.queryByText("connect")).toBeNull();
     const fold = screen.getByTestId("twitch-fold");

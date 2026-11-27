@@ -248,7 +248,16 @@ export const SpectateView = ({
                 </IconButton>
               </Tooltip>
               <TwitchGlyph size={18} />
-              <h2 className={styles.heading}>{TwitchMessages.twitch()}</h2>
+              <h2 className={clsx(styles.heading, streams.length > 0 && styles.headingBeforeCount)}>
+                {TwitchMessages.twitch()}
+              </h2>
+              {/* How many are live, in a bubble after the heading, collapsed too (Sarah's board: "there should be a
+                  number here in a little bubble or something so it shows how many streams are running"). */}
+              {streams.length > 0 && (
+                <span className={styles.streamCount} data-testid="twitch-count">
+                  {streams.length}
+                </span>
+              )}
               {!twitchCollapsed && twitchAction}
             </div>
             {!twitchCollapsed && streams.length > 0 && (
