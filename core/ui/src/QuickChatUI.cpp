@@ -102,20 +102,8 @@ Drawn Draw(const View& view, float scale, float font_px, ImU32 accent, const std
   if (view.state == View::State::Closed)
     return drawn;
 
-  // Appearing, and fading out once sent.
-  float alpha = 1.0f;
-  if (view.state == View::State::Open)
-  {
-    alpha = std::min(1.0f, static_cast<float>(now_ms - view.since_ms) / APPEAR_MS);
-  }
-  else
-  {
-    const u64 shown = now_ms - view.since_ms;
-    if (shown + QC::FADE_MS > QC::SENT_MS)
-      alpha = static_cast<float>(QC::SENT_MS - std::min(shown, QC::SENT_MS)) / QC::FADE_MS;
-  }
-  if (alpha <= 0.0f)
-    return drawn;
+  // Appearing.
+  const float alpha = std::min(1.0f, static_cast<float>(now_ms - view.since_ms) / APPEAR_MS);
 
   const ImGuiIO& io = ImGui::GetIO();
   ImFont* const font = ImGui::GetFont();
@@ -228,7 +216,6 @@ Drawn Draw(const View& view, float scale, float font_px, ImU32 accent, const std
   dl->AddCircleFilled(ImVec2(gx, gy), 0.2f * arm, Fade(IM_COL32(44, 47, 56, 255), alpha));
 
   // The messages, each on its direction's side.
-  const bool sent = view.state == View::State::Sent;
   const ImU32 text_color = IM_COL32(236, 238, 244, 255);
   const ImU32 dash_color = IM_COL32(86, 90, 104, 255);
   struct Place
@@ -245,8 +232,6 @@ Drawn Draw(const View& view, float scale, float font_px, ImU32 accent, const std
   {
     const Place& p = places[d];
     const Wrapped& m = w[d];
-    const bool chosen = sent && d == view.chosen;
-    const float a = sent && !chosen ? alpha * 0.22f : alpha;
     if (m.lines.empty())
     {
       const float dx = p.align == Align::Left   ? p.x :
@@ -255,22 +240,10 @@ Drawn Draw(const View& view, float scale, float font_px, ImU32 accent, const std
       const float dy = std::round(p.top + line_h * 0.5f);
       const float thick = std::max(2.0f * scale, std::round(0.1f * t));
       dl->AddRectFilled(ImVec2(dx, dy - thick * 0.5f), ImVec2(dx + dash, dy + thick * 0.5f),
-                        Fade(dash_color, a), thick * 0.5f);
+                        Fade(dash_color, alpha), thick * 0.5f);
       continue;
     }
-    if (chosen)
-    {
-      // The sent message on a pill of the player's colour.
-      const float left = p.align == Align::Left   ? p.x :
-                         p.align == Align::Center ? p.x - m.w * 0.5f :
-                                                    p.x - m.w;
-      const ImVec2 grow(0.45f * t, 0.22f * t);
-      dl->AddRectFilled(ImVec2(left - grow.x, p.top - grow.y),
-                        ImVec2(left + m.w + grow.x, p.top + m.h + grow.y), Fade(accent, a),
-                        0.45f * t);
-    }
-    DrawLines(dl, font, t, m, p.x, p.top, line_h, p.align,
-              Fade(chosen ? IM_COL32(17, 18, 23, 255) : text_color, a));
+    DrawLines(dl, font, t, m, p.x, p.top, line_h, p.align, Fade(text_color, alpha));
   }
 
   if (!notice.empty())
@@ -281,7 +254,6 @@ Drawn Draw(const View& view, float scale, float font_px, ImU32 accent, const std
   }
 
   // How long the open group stays: a thin line along the bottom edge, running out.
-  if (view.state == View::State::Open)
   {
     const float left = x0 + radius;
     const float right = x1 - radius;

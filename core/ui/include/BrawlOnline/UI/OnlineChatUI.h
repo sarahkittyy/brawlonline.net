@@ -100,7 +100,7 @@ struct TestFrame
   int spectators_rows = 0;
   int spectators_loaded = 0;
   bool spectators_more = false;
-  // Quick chat's menu (QuickChatUI): 0 not drawn, 1 a group open, 2 a message sent; the group (a
+  // Quick chat's menu (QuickChatUI): 0 not drawn, 1 a group open; the group (a
   // QuickChat::Direction) and where the panel is.
   int quick_chat = 0;
   int quick_chat_group = 0;

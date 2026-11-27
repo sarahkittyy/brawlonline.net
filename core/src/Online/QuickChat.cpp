@@ -259,8 +259,6 @@ View Tick(u64 now_ms, Result* result)
   View& v = s.view;
   if (v.state == View::State::Open && now_ms - v.last_press_ms >= OPEN_MS)
     v.state = View::State::Closed;
-  if (v.state == View::State::Sent && now_ms - v.since_ms >= SENT_MS)
-    v.state = View::State::Closed;
   if (!UsableLocked(now_ms))
   {
     s.presses.clear();
@@ -303,12 +301,10 @@ View Tick(u64 now_ms, Result* result)
     lk.lock();
     if (result)
       *result = r;
-    if (r == Result::Sent && v.state == View::State::Open)
-    {
-      v.state = View::State::Sent;
-      v.chosen = p;
-      v.since_ms = now_ms;
-    }
+    // Sent: the menu goes away (the message is in the chat window). Refused: it stays open, with
+    // why under it.
+    if (r == Result::Sent)
+      v.state = View::State::Closed;
   }
   return v;
 }

@@ -202,15 +202,13 @@ def test_quick_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., Dol
     assert hand(a) == before
     shoot("01-up-open")
 
-    # Right: "one more?" goes to otto as a chat message; ines's menu shows it sent.
+    # Right: "one more?" goes to otto as a chat message; ines's menu goes away at once.
     B.tap(a.c, 0, ["DRIGHT"], hold=4, release=4)
     shoot("02-up-right-sent")
     f = last_frame(a)
-    assert f["quick_chat"] == 2, f
+    assert f["quick_chat"] == 0, f
     until_chat(b, lambda s: "one more?" in texts(s, "message"), "ines's quick chat")
     assert "one more?" in texts(a.c.call("chat_status"), "own")
-    B.step(a.c, 90)
-    assert last_frame(a)["quick_chat"] == 0
 
     # Left: the longest message beside the D-pad, and kana; Left again sends the kana.
     B.tap(a.c, 0, ["DLEFT"], hold=4, release=12)

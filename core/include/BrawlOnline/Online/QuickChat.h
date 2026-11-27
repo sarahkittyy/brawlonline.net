@@ -4,8 +4,8 @@
 // Quick chat (docs/design/quick-chat.md): 16 messages the player sets in the launcher (Settings >
 // Social), sent with a GameCube controller's D-pad on the online CSS. A first press opens that
 // direction's group of four, a second press sends the message in its direction to the chat (as if
-// typed: Online::Chat::Send), or closes the group if that slot is unset. The window is core/ui
-// QuickChatUI.
+// typed: Online::Chat::Send) and closes the group, or just closes it if that slot is unset. The
+// window is core/ui QuickChatUI.
 //
 // On the CSS the D-pad moves the hand like the stick (measured 2026-11-26); while quick chat can be
 // used it is taken out of what the game reads, and B too while a group is open (B closes it):
@@ -42,10 +42,8 @@ constexpr int DIRECTIONS = 4;
 constexpr size_t MESSAGES = 16;
 using Messages = std::array<std::string, MESSAGES>;
 
-// An open group closes after this long without a press; a sent message stays this long.
+// An open group closes after this long without a press.
 constexpr u64 OPEN_MS = 3000;
-constexpr u64 SENT_MS = 1100;
-constexpr u64 FADE_MS = 220;
 // The chat window's word that quick chat can be used is good for this long (UI frames).
 constexpr u64 SHOWN_STALE_MS = 500;
 
@@ -76,12 +74,10 @@ struct View
   {
     Closed,
     Open,  // a group is open: `group`
-    Sent,  // `group`'s `chosen` was sent at `since_ms`
   };
   State state = State::Closed;
   int group = 0;
-  int chosen = 0;
-  u64 since_ms = 0;  // when it opened / was sent
+  u64 since_ms = 0;  // when it opened
   u64 last_press_ms = 0;
   Messages messages;
 };

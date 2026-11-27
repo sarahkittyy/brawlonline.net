@@ -125,17 +125,21 @@ TEST(QuickChat, OpensAGroupAndSendsItsMessage)
   EXPECT_EQ(Filter(PAD_BUTTON_UP, 1010), 0);
   EXPECT_EQ(QC::Tick(1010, nullptr).state, QC::View::State::Open);
   EXPECT_TRUE(s_sent.empty());
-  // Let go, right: "one more?".
+  // Let go, right: "one more?", and the menu goes away.
   Filter(0, 1020);
   Filter(PAD_BUTTON_RIGHT, 1030);
   auto result = QC::Result::None;
   v = QC::Tick(1030, &result);
   EXPECT_EQ(result, QC::Result::Sent);
-  EXPECT_EQ(v.state, QC::View::State::Sent);
-  EXPECT_EQ(v.chosen, QC::Right);
+  EXPECT_EQ(v.state, QC::View::State::Closed);
   ASSERT_EQ(s_sent.size(), 1u);
   EXPECT_EQ(s_sent[0], "one more?");
-  EXPECT_EQ(QC::Tick(1030 + QC::SENT_MS, nullptr).state, QC::View::State::Closed);
+  // The next press opens a group again.
+  Filter(0, 1040);
+  Filter(PAD_BUTTON_LEFT, 1050);
+  v = QC::Tick(1050, nullptr);
+  EXPECT_EQ(v.state, QC::View::State::Open);
+  EXPECT_EQ(v.group, QC::Left);
 }
 
 TEST(QuickChat, SameDirectionTwiceSendsThatOne)

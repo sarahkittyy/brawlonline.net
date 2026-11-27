@@ -3,9 +3,8 @@
 
 // Quick chat's menu (docs/design/quick-chat.md, Online/QuickChat.h), drawn over the CSS with the
 // chat's ImGui and font: the open group's four messages around a D-pad, each on the side of the
-// direction that sends it, the group's own arm lit in the player's colour. A sent message lights up
-// in that colour and the menu fades out. OnlineChatUI::Display draws it while the chat window is
-// shown, under the ImGui lock.
+// direction that sends it, the group's own arm lit in the player's colour. Sending a message closes
+// it. OnlineChatUI::Display draws it while the chat window is shown, under the ImGui lock.
 //
 // The messages are the player's own (the launcher's Settings > Social), drawn with AddText only.
 
