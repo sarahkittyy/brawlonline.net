@@ -29,6 +29,7 @@ import { Readable } from "stream";
 import type { ByteProgress } from "utils/copy_file";
 import { throttleProgress } from "utils/copy_file";
 import { fetchErrorMessage, fetchRetrying } from "utils/fetch_error";
+import { moveTree } from "utils/move_tree";
 import { removeTree } from "utils/remove_tree";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
@@ -827,7 +828,8 @@ export class EmissaryRecomp {
         await removeTree(path.join(dir, "UserData"));
       }
       await removeTree(dest);
-      await fs.promises.rename(top, dest);
+      // An antivirus scanning the new program holds the folder for a while (EPERM on Windows).
+      await moveTree(top, dest, { copyFallback: true, log: (m) => this.log(`EmissaryRecomp: ${m}`) });
     } catch (err) {
       throw await asDiskSpaceError(err, this.opts.root, "EmissaryRecomp");
     } finally {
@@ -988,7 +990,9 @@ export class EmissaryRecomp {
       if (!(await exists(path.join(partial, "DATA", "sys", "main.dol")))) {
         throw new EmissaryError("The disc image's game files could not be read (no sys/main.dol).");
       }
-      await fs.promises.rename(partial, gameRoot);
+      await moveTree(partial, gameRoot, { log: (m) => this.log(`EmissaryRecomp: ${m}`) }).catch((err) => {
+        throw heldError(err, "Brawl's game files");
+      });
     } catch (err) {
       await removeTree(partial).catch(() => undefined);
       throw await asDiskSpaceError(err, this.opts.root, "Brawl's game files", { needBytes: GAME_FILES_BYTES });
@@ -1022,6 +1026,18 @@ export class EmissaryRecomp {
     this.log(`EmissaryRecomp: removed ${this.opts.root}`);
     await this.emit();
   }
+}
+
+/** A move another program kept failing (Windows: an antivirus scan of the new files), said so. */
+function heldError(err: unknown, what: string): unknown {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
+    return err;
+  }
+  return new EmissaryError(
+    `Another program (often an antivirus scan) kept ${what} open, so they could not be moved into ` +
+      `place. Try again in a minute. (${(err as Error).message})`,
+  );
 }
 
 async function exists(p: string): Promise<boolean> {
