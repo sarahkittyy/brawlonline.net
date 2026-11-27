@@ -43,6 +43,7 @@ import {
   emissaryFiles,
   folderFiles,
   logsArchiveBuffer,
+  macCrashReports,
   writeLogsArchive,
 } from "./logs_archive";
 import { listNetplayNetworks } from "./netplay_networks";
@@ -246,6 +247,12 @@ async function logFiles(
   // Whether the graphics driver reset (bug report #364: EmissaryRecomp closed on a lost Vulkan device).
   if (process.platform === "win32") {
     files.push({ name: "gpu-driver-events.txt", source: { text: await driverEventsText() } });
+  }
+  // What macOS saw of a crash (bug report #366: Dolphin crashed at start, before its log).
+  if (isMac) {
+    files.push(
+      ...(await macCrashReports(path.join(os.homedir(), "Library", "Logs", "DiagnosticReports"), "crash-reports")),
+    );
   }
   for (const [launchType, zipFolder] of [
     [DolphinLaunchType.NETPLAY, "netplay-dolphin"],

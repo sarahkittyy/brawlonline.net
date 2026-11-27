@@ -134,6 +134,17 @@ while IFS= read -r f; do
   done < <(otool -l "$f" | awk '$1 == "cmd" { c = $2 }
       (c == "LC_BUILD_VERSION" && $1 == "minos") || (c == "LC_VERSION_MIN_MACOSX" && $1 == "version") { print $2 }')
 done < <(find "$app" -type f)
+# A weak import from libSystem is a function newer than $min_macos, picked up by a library's
+# configure check from a newer SDK: it is null on older macOS. libusb's pipe2 (macOS 27) from
+# Sarah's Mac crashed Dolphin at start on macOS 26 (bug report #366). futimens (macOS 10.13) is
+# weak in mGBA but on every macOS we support.
+for exe in "$app/Contents/MacOS/"*; do
+  while IFS= read -r sym; do
+    echo "::error::${exe#"$app/"} weakly imports $sym from libSystem: it is newer than macOS $min_macos"
+    bad=1
+  done < <(nm -m "$exe" | awk '/\(undefined\) weak external/ && /\(from libSystem\)/ { print $(NF - 2) }' |
+      grep -vx '_futimens')
+done
 [ "$bad" = 0 ] || exit 1
 
 # ---- Sign -------------------------------------------------------------------------------

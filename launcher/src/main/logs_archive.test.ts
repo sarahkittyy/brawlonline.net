@@ -9,6 +9,7 @@ import {
   emissaryFiles,
   folderFiles,
   logsArchiveBuffer,
+  macCrashReports,
   redactDolphinIni,
   writeLogsArchive,
 } from "./logs_archive";
@@ -136,5 +137,30 @@ describe("logs archive", () => {
       "netplay-dolphin/Logs/dolphin.log",
     ]);
     expect(await emissaryFiles(path.join(dir, "none"), path.join(dir, "none"), "x", 20)).toEqual([]);
+  });
+
+  it("has macOS's newest recent crash reports of our programs only", async () => {
+    const now = 2_000_000_000_000;
+    const reports = path.join(dir, "DiagnosticReports");
+    const add = async (name: string, ageDays: number) => {
+      const file = await write(`DiagnosticReports/${name}`, name);
+      const at = (now - ageDays * 24 * 60 * 60 * 1000) / 1000;
+      await fs.promises.utimes(file, at, at);
+    };
+    await add("Dolphin-2026-11-26-203505.ips", 0);
+    await add("Dolphin-2026-11-25-101010.ips", 1);
+    await add("dolphin-tool-2026-11-24-101010.ips", 2);
+    await add("Brawl Online Helper (Renderer)-2026-11-23-101010.ips", 3);
+    await add("Dolphin-2026-11-01-101010.ips", 20);
+    await add("Safari-2026-11-26-101010.ips", 0);
+    await add("DolphinFoo.txt", 0);
+
+    const files = await macCrashReports(reports, "crash-reports", now);
+    expect(files.map((f) => f.name)).toEqual([
+      "crash-reports/Dolphin-2026-11-26-203505.ips",
+      "crash-reports/Dolphin-2026-11-25-101010.ips",
+      "crash-reports/dolphin-tool-2026-11-24-101010.ips",
+    ]);
+    expect(await macCrashReports(path.join(dir, "none"), "x", now)).toEqual([]);
   });
 });

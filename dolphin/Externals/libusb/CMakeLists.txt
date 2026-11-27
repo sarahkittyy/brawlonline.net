@@ -108,7 +108,14 @@ set(CMAKE_EXTRA_INCLUDE_FILES poll.h)
 check_type_size("nfds_t" NFDS_T)
 unset(CMAKE_EXTRA_INCLUDE_FILES)
 
-check_function_exists(pipe2 HAVE_PIPE2)
+if(APPLE)
+  # pipe2 is new in macOS 27. Against a macOS 27 SDK check_function_exists still finds it (weakly
+  # linked for an older deployment target), and libusb_init then calls a null pipe2 on macOS 26
+  # and older: Dolphin crashed at start (bug report #366). INTERNAL overwrites an earlier result.
+  set(HAVE_PIPE2 "" CACHE INTERNAL "pipe2 needs macOS 27")
+else()
+  check_function_exists(pipe2 HAVE_PIPE2)
+endif()
 check_function_exists(pthread_condattr_setclock HAVE_PTHREAD_CONDATTR_SETCLOCK)
 check_function_exists(pthread_setname_np HAVE_PTHREAD_SETNAME_NP)
 check_function_exists(pthread_threadid_np HAVE_PTHREAD_THREADID_NP)

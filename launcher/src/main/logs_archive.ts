@@ -99,6 +99,32 @@ export async function emissaryFiles(
   return files;
 }
 
+/** macOS's crash reports of Dolphin, dolphin-tool and the launcher (`<name>-<date>.ips`). */
+const MAC_CRASH_REPORT = /^(Dolphin|dolphin-tool|Brawl Online)[-_ ].*\.ips$/;
+/** How many of them a zip has, the newest. */
+export const MAC_CRASH_REPORTS_ARCHIVED = 3;
+/** And how old they may be. */
+const MAC_CRASH_REPORT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The newest crash reports macOS wrote (`~/Library/Logs/DiagnosticReports`) for our programs
+ * under `zipFolder`: a crash at start leaves no Dolphin log, only this (bug report #366).
+ */
+export async function macCrashReports(folder: string, zipFolder: string, now = Date.now()): Promise<ArchiveFile[]> {
+  const names = (await readdir(folder).catch(() => [] as string[])).filter((n) => MAC_CRASH_REPORT.test(n));
+  const recent: string[] = [];
+  for (const name of names) {
+    const at = (await stat(path.join(folder, name)).catch(() => null))?.mtimeMs ?? 0;
+    if (now - at <= MAC_CRASH_REPORT_MAX_AGE_MS) {
+      recent.push(name);
+    }
+  }
+  return (await newest(folder, recent, MAC_CRASH_REPORTS_ARCHIVED)).map((name) => ({
+    name: `${zipFolder}/${name}`,
+    source: { path: path.join(folder, name) },
+  }));
+}
+
 /** Dolphin.ini without the analytics ID (`[Analytics] ID`), which identifies the player's machine. */
 export function redactDolphinIni(text: string): string {
   let section = "";
