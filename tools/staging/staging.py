@@ -1358,6 +1358,17 @@ def emissary_build(args: argparse.Namespace) -> None:
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join([str(toolchain / "llvm-mingw" / "bin"), str(toolchain / "Ninja"),
                                    str(toolchain / "CMake" / "bin"), env.get("PATH", "")])
+    # Project+'s code variants, as release CI builds them (the recomp's docs/releases.md): the encrypted spec beside
+    # the CI's game code, when there is one and the recomp's game_code.py can read it.
+    variants = ROOT / "run" / "private" / "emissary-ci" / "pplus-variants.tar.gz.gpg"
+    tool = wt / "tools" / "ci" / "game_code.py"
+    if variants.exists() and tool.exists() and "unpack-variants" in tool.read_text(encoding="utf-8"):
+        spec = EMISSARY / "variants"
+        shutil.rmtree(spec, ignore_errors=True)
+        run([sys.executable, str(tool), "unpack-variants", "--in", str(variants), "--out", str(spec),
+             "--key-file", str(variants.parent / "game-code.key")], log=log)
+        env["EMISSARY_CODE_VARIANTS"] = str(spec / "spec.txt")
+        say(f"with Project+'s code variants ({variants.name})")
     build = EMISSARY / "build"
     run([str(cmake), f"-DGAME={game.as_posix()}", f"-DBUILD_DIR={build.as_posix()}", f"-DJOBS={args.jobs}",
          f"-DBRAWL_ONLINE={SRC.as_posix()}", f"-DRELEASE_VERSION={tag}", "-P", str(wt / "build.cmake")],
