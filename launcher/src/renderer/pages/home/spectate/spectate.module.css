@@ -568,7 +568,9 @@
   margin-bottom: 0;
 }
 
-/* The number of streams after the heading, in Twitch's purple; the heading's push to the right moves to it. */
+/* The number of streams after the heading, in Twitch's purple; the heading's push to the right moves to it. Digits
+   have no descenders, so a 20 px line box draws them low: 1.5 px of it moves under them (the system and menu fonts
+   both sat 0.75 px low). */
 .headingBeforeCount {
   margin-right: 0;
 }
@@ -577,11 +579,12 @@
   margin-right: auto;
   min-width: 20px;
   box-sizing: border-box;
-  padding: 0 6px;
+  height: 20px;
+  padding: 0 6px 1.5px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
-  line-height: 20px;
+  line-height: 18.5px;
   text-align: center;
   color: #fff;
   background-color: #9146ff;
