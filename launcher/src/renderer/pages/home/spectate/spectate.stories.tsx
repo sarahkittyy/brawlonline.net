@@ -239,9 +239,9 @@ const TwitchRow = ({ collapsed: initial, live = true }: { collapsed: boolean; li
             twitchAction: (
               <Button
                 size="small"
-                variant="outlined"
+                variant="text"
                 color="secondary"
-                className={twitchStyles.connect}
+                className={`${twitchStyles.connect} ${twitchStyles.rowConnect}`}
                 startIcon={<TwitchGlyph size={14} />}
               >
                 {TwitchMessages.connectAccount()}

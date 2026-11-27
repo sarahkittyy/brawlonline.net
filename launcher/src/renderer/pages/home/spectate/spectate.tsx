@@ -2,6 +2,7 @@ import type { LiveGameEntry } from "@spectate/types";
 import React, { useEffect, useRef, useState } from "react";
 
 import { TwitchConnectButton } from "@/components/twitch/twitch";
+import twitchStyles from "@/components/twitch/twitch.module.css";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -90,7 +91,11 @@ export const Spectate = React.memo(function Spectate() {
         sort={sort === "elo" ? "elo" : "newest"}
         onSortChange={setSort}
         streams={streams}
-        twitchAction={twitch?.available && !twitch.linked ? <TwitchConnectButton /> : null}
+        twitchAction={
+          twitch?.available && !twitch.linked ? (
+            <TwitchConnectButton variant="text" className={twitchStyles.rowConnect} />
+          ) : null
+        }
         twitchCollapsed={twitchCollapsed}
         onTwitchCollapsedChange={setTwitchCollapsed}
       />

@@ -273,6 +273,32 @@ button.panel:focus-visible {
   white-space: nowrap;
 }
 
+/* Connect account at the right of Spectate's Twitch row: Twitch's purple, as the rest of the row (its logo, the count
+   and the stream panels' tint), and no taller than the heading. The theme's outlined button was a tall box in another
+   colour by the heading (bug report #375: "Connect account button is ugly in the spectate section"). button.: over
+   MUI's own class where its styles come after these (Storybook). */
+button.rowConnect {
+  height: 28px;
+  padding: 0 11px 0 9px;
+  border: 1px solid rgb(145 70 255 / 45%);
+  border-radius: 6px;
+  background-color: rgb(145 70 255 / 14%);
+  color: var(--text-primary, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+button.rowConnect:hover,
+button.rowConnect:focus-visible {
+  border-color: rgb(145 70 255 / 70%);
+  background-color: rgb(145 70 255 / 26%);
+}
+
+button.rowConnect:disabled {
+  color: var(--text-secondary);
+}
+
 /* The profile hint's last step (use_twitch.ts): gold, as the pencil before it (profile.module.css .pencilGlow). */
 .glow {
   --profile-glow: 255 205 70;

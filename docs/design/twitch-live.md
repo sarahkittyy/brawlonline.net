@@ -41,7 +41,8 @@ without Twitch (the typed handle, or the name, becomes the account).
 - **Spectate:** a Twitch row at the top, above the featured game, while there are streams; cards most
   viewers first; "(logo) Twitch" on the left and Connect account on the right for a player who hasn't connected.
   Without streams the row shows for that player too, its heading and Connect account only (Sarah's board: the
-  button "should be there, somewhere").
+  button "should be there, somewhere"). That Connect account is in Twitch's purple (a tint and a purple border, as
+  the stream panels), 28 px, no taller than the heading, not the theme's outlined button (bug report #375).
   The logo after live players' names in the list and the featured game. The featured game is a little smaller.
   A card's picture and title open the stream; the player's name under the picture is a name as anywhere else
   (hover card, profile on a click, player menu on a right click), so the card itself is no button.
