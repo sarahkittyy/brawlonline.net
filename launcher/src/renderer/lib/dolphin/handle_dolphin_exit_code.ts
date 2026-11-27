@@ -2,6 +2,11 @@ const { isLinux, isWindows } = window.electron.bootstrap;
 
 import { HandleDolphinExitCodeMessages as Messages } from "./handle_dolphin_exit_code.messages";
 
+// EmissaryRecomp closed itself because the graphics driver took its device away and it could not
+// make a new one (it does up to 3 times a run, the 2nd on Vulkan moving to Direct3D 12): the
+// recomp's aurora_events.h kExitGraphicsDeviceLost.
+const EMISSARY_GRAPHICS_DEVICE_LOST = 0x4c;
+
 export const handleDolphinExitCode = (exitCode: number | null): string | undefined => {
   if (exitCode == null || exitCode === 0) {
     return undefined;
@@ -41,6 +46,9 @@ const handleWindowsExitCode = (exitCode: number): string | undefined => {
       // hang watchdog left a dump of what it was stuck on in its Logs, which a bug report uploads.
       return Messages.dolphinStoppedResponding();
     }
+    case EMISSARY_GRAPHICS_DEVICE_LOST: {
+      return Messages.emissaryGraphicsDeviceLost();
+    }
     default: {
       const errorCode = `0x${exitCode.toString(16)}`;
       return Messages.dolphinExitedWithErrorCode(errorCode);
@@ -52,6 +60,9 @@ const handleLinuxExitCode = (exitCode: number): string => {
   switch (exitCode) {
     case 0x7f: {
       return Messages.requiredLibrariesMissing();
+    }
+    case EMISSARY_GRAPHICS_DEVICE_LOST: {
+      return Messages.emissaryGraphicsDeviceLost();
     }
     default: {
       const errorCode = `0x${exitCode.toString(16)}`;

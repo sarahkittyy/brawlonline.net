@@ -20,6 +20,8 @@ export const HandleDolphinExitCodeMessages = {
     "Dolphin couldn't start: Windows has no {0}. Please report this with the bug button (Settings > Help).",
   dllNotX64: (name: string) =>
     "Dolphin couldn't start: the {0} it found is not 64-bit. Repair the Microsoft Visual C++ Redistributable (x64) (Settings > Help has the link), or remove that file if something else put it there.",
+  emissaryGraphicsDeviceLost: () =>
+    "EmissaryRecomp closed because the graphics driver kept resetting. Updating the graphics driver, or closing overlays and capture programs (OBS, Overwolf, RivaTuner, Medal), can help.",
   requiredLibrariesMissing: () =>
     "Required libraries for launching Dolphin may be missing. Check the Help section in the settings page for guidance.",
 };
