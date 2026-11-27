@@ -810,31 +810,44 @@ void DrawMenuBarPlayers(float scale)
     ImGui::TextUnformatted("Nobody else here yet");
     ImGui::PopStyleColor();
   }
+  // What doesn't fit after the names goes, the code first, then the padlock; the D-pad stays as
+  // long as it fits, since it says quick chat can be used here.
   const float gap = 6.0f * scale;
   const float lock_w = 0.75f * ImGui::GetTextLineHeight();
   const float code_w =
       v.code.empty() ? 0.0f : ImGui::CalcTextSize(v.code.data(), v.code.data() + v.code.size()).x;
   const bool quick = Online::QuickChat::Usable(Common::Timer::NowMs());
-  const float quick_w = quick ? DPadWidth() + 2.0f * gap : 0.0f;
   const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-  const float start = right - lock_w - quick_w - (v.code.empty() ? 0.0f : code_w + gap);
-  if (start > ImGui::GetCursorPosX() + 8.0f * scale)
+  const float min_start = ImGui::GetCursorPosX() + 8.0f * scale;
+  bool code = !v.code.empty();
+  bool lock = true;
+  const auto start = [&] {
+    const float after_quick = (code ? code_w + gap : 0.0f) + (lock ? lock_w : 0.0f);
+    const float quick_w = quick ? DPadWidth() + (after_quick > 0.0f ? 2.0f * gap : 0.0f) : 0.0f;
+    return right - quick_w - after_quick;
+  };
+  if (start() <= min_start)
+    code = false;
+  if (quick && start() <= min_start)
+    lock = false;
+  if (start() <= min_start)
+    return;
+  ImGui::SetCursorPosX(start());
+  if (quick)
   {
-    ImGui::SetCursorPosX(start);
-    if (quick)
-    {
-      QuickChatIcon();
+    QuickChatIcon();
+    if (code || lock)
       ImGui::SameLine(0.0f, 2.0f * gap);
-    }
-    if (!v.code.empty())
-    {
-      ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
-      ImGui::TextUnformatted(v.code.data(), v.code.data() + v.code.size());
-      ImGui::PopStyleColor();
-      ImGui::SameLine(0.0f, gap);
-    }
-    LockIcon(scale);
   }
+  if (code)
+  {
+    ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
+    ImGui::TextUnformatted(v.code.data(), v.code.data() + v.code.size());
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.0f, gap);
+  }
+  if (lock)
+    LockIcon(scale);
 }
 
 void DrawMemberMenu()
