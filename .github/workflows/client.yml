@@ -382,12 +382,19 @@ jobs:
       CCACHE_MAXSIZE: 3G
       NODE_OPTIONS: --max-old-space-size=8192
       USE_HARD_LINKS: "false"
-      # Code signing is deferred. To sign later: add the repository secrets WIN_CSC_LINK (base64
-      # .pfx or a URL) and WIN_CSC_KEY_PASSWORD ("win.signAndEditExecutable" is already true in
-      # launcher/electron-builder.json). While the secrets are unset the build stays unsigned.
+      # Code signing with Azure Artifact Signing (formerly Trusted Signing), on once the repository
+      # variable WIN_SIGN_ACCOUNT is set (see docs/ci.md, "Windows signing"): electron-builder
+      # signs Brawl Online.exe, every .exe under resources (Dolphin.exe, DolphinTool.exe,
+      # elevate.exe), the installer and its uninstaller. While WIN_SIGN_ACCOUNT is unset the build
+      # stays unsigned, as before. A .pfx still works instead: secrets WIN_CSC_LINK and
+      # WIN_CSC_KEY_PASSWORD.
       CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      WIN_SIGN_ACCOUNT: ${{ vars.WIN_SIGN_ACCOUNT }}
+      WIN_SIGN_ENDPOINT: ${{ vars.WIN_SIGN_ENDPOINT }}
+      WIN_SIGN_PROFILE: ${{ vars.WIN_SIGN_PROFILE }}
+      WIN_SIGN_PUBLISHER: ${{ vars.WIN_SIGN_PUBLISHER }}
     steps:
       - name: Long paths
         run: git config --global core.longpaths true
@@ -525,10 +532,32 @@ jobs:
         shell: bash
         env:
           PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+          # The Azure app registration that may sign with the account's certificate profile
+          # (role "Artifact Signing Certificate Profile Signer"); read by the TrustedSigning
+          # PowerShell module electron-builder installs.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
+          sign=()
+          if [ -n "$WIN_SIGN_ACCOUNT" ]; then
+            # Once a signed launcher is out it only installs updates signed by the same publisher
+            # (electron-updater checks win.azureSignOptions.publisherName, written into
+            # app-update.yml), so a half-configured run fails here instead of publishing an
+            # unsigned build that every signed launcher would refuse.
+            for v in WIN_SIGN_ENDPOINT WIN_SIGN_PROFILE WIN_SIGN_PUBLISHER AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+              [ -n "${!v}" ] || { echo "::error::WIN_SIGN_ACCOUNT is set but $v is not (docs/ci.md, Windows signing)"; exit 1; }
+            done
+            sign=(
+              "-c.win.azureSignOptions.codeSigningAccountName=$WIN_SIGN_ACCOUNT"
+              "-c.win.azureSignOptions.endpoint=$WIN_SIGN_ENDPOINT"
+              "-c.win.azureSignOptions.certificateProfileName=$WIN_SIGN_PROFILE"
+              "-c.win.azureSignOptions.publisherName=$WIN_SIGN_PUBLISHER"
+            )
+          fi
           npm run stage:plugin
           npm run build
-          npx electron-builder build --win --publish never
+          npx electron-builder build --win --publish never "${sign[@]}"
           ls -l release/build
       - name: Check the package
         working-directory: launcher/release/build
@@ -540,6 +569,19 @@ jobs:
           # No blockmap while nsis.differentialPackage is false (the updater downloads in full).
           mv *.exe.blockmap "$RUNNER_TEMP/out-win/" 2>/dev/null || true
           ls -l "$RUNNER_TEMP/out-win"
+      - name: Check the signatures
+        if: ${{ vars.WIN_SIGN_ACCOUNT != '' }}
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem "$env:RUNNER_TEMP\out-win\*.exe") +
+            @(Get-ChildItem "launcher\release\build\win-unpacked" -Recurse -File -Filter *.exe)
+          $bad = 0
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($s.Status) $($f.Name) $($s.SignerCertificate.Subject)"
+            if ($s.Status -ne "Valid" -or $s.SignerCertificate.Subject -notlike "*CN=$env:WIN_SIGN_PUBLISHER*") { $bad++ }
+          }
+          if ($bad) { Write-Host "::error::$bad exe(s) not signed by $env:WIN_SIGN_PUBLISHER"; exit 1 }
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-windows

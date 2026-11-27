@@ -121,9 +121,25 @@ GitHub-hosted `windows-latest` (Visual Studio 18). It stays on GitHub: Windows r
 
 ## Secrets and settings
 
-Windows signing is deferred; the Windows build is unsigned:
+### Windows signing
 
-- Windows: add repository secrets `WIN_CSC_LINK` (base64 of the `.pfx`, or an https URL) and `WIN_CSC_KEY_PASSWORD`, The windows job already passes them as `CSC_LINK`/`CSC_KEY_PASSWORD`, and `"signAndEditExecutable"` is already `true` in `launcher/electron-builder.json` (`win`): without a certificate it only writes the icon and version info into the exe.
+The Windows build is unsigned until the repository variable `WIN_SIGN_ACCOUNT` is set; then the windows job signs it with Azure Artifact Signing (formerly Trusted Signing) through electron-builder's `win.azureSignOptions`, passed on the command line from the variables below (`launcher/electron-builder.json` stays unchanged, so local and staging builds stay unsigned). Signed: `Brawl Online.exe`, every `.exe` under `resources` (`Dolphin.exe`, `DolphinTool.exe`, `elevate.exe`), the installer and its uninstaller; not the DLLs (`win.signExts` would add them, one signing call each). `gc-driver-install.exe` already carries Slippi's signature. "Check the signatures" fails the job when any of those exes is not validly signed by `WIN_SIGN_PUBLISHER`. Unsigned builds were flagged by Windows Defender's cloud model as `Trojan:Win32/Bearfoos.A!ml` on 2026-11-26, the day of launcher 0.2.11 and EmissaryRecomp 0.7.0-0.7.2 (Discord #general and #support; which file was not reported); an unsigned file with a new hash every release has no reputation of its own.
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| variable | `WIN_SIGN_ACCOUNT` | the Artifact Signing account's name (turns signing on) |
+| variable | `WIN_SIGN_ENDPOINT` | the account's regional endpoint, e.g. `https://eus.codesigning.azure.net/` (East US) |
+| variable | `WIN_SIGN_PROFILE` | the Public Trust certificate profile's name |
+| variable | `WIN_SIGN_PUBLISHER` | the certificate's subject CN exactly (for an individual's identity validation, the person's legal name) |
+| secret | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | an Entra app registration with the "Artifact Signing Certificate Profile Signer" role (formerly "Trusted Signing Certificate Profile Signer") on the account |
+
+Setting it up, once: an Azure subscription with the `Microsoft.CodeSigning` resource provider registered; an Artifact Signing account (Basic SKU, 5,000 signatures a month; each release signs under 10 files); the "Identity Verifier" role on it for yourself, then an identity validation (Individual or Organization, Public Trust; Microsoft checks ID documents, which can take days); a certificate profile of type Public Trust from that validation; an app registration with a client secret and the signer role. Its certificates last 3 days and Microsoft renews them; the subject CN stays, which is what the updater compares.
+
+Once one signed launcher is out, keep signing on: electron-updater writes `publisherName` into `app-update.yml` and installs only updates signed by that publisher, so an unsigned release afterwards would not install for anyone on a signed build (the job fails rather than build without one of the settings). Changing the publisher name means a release signed with both is needed first (`publisherName` takes a list).
+
+A `.pfx` certificate works instead of Azure: repository secrets `WIN_CSC_LINK` (base64 of the `.pfx`, or an https URL) and `WIN_CSC_KEY_PASSWORD`, which the job passes as `CSC_LINK`/`CSC_KEY_PASSWORD` (`"signAndEditExecutable"` is already `true` in `launcher/electron-builder.json`).
+
+EmissaryRecomp's Windows zip (`WiiCompiled.exe`, `engine_usa*.dll`) is built and released by the recomp's own CI and is unsigned; signing it would need the same Azure settings there.
 
 macOS (Apple Developer Program, the `macos` job):
 
