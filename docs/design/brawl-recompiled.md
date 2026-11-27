@@ -486,3 +486,32 @@ Recomp db94c4b on `brawlonline/windows-build` (local, not pushed, not released).
 - Two of the three played 6,558 of 6,558 frames in sync. In the first run the playback stood still at frame 3170 after the rebuild (the game thread waiting at the playback's loop top, not in the GPU). It didn't happen again, and a run without removal passed.
 
 **Not checked:** a real driver reset on Direct3D 12, and a live online session through one.
+
+## 22. Why the device was lost: a fence released while still pending (2026-11-27)
+
+Recomp `brawlonline/fence-release` 2673c81, merged into `brawlonline/windows-build` de119c8 (local, not pushed, not released).
+
+**The pattern in the reports.** Every recomp bug zip from #343 to #370 was checked (survey: device, driver, API, settings, scene at the loss). There were 7 losses on 5 PCs (RTX 3060, GTX 1070 Ti, RTX 4090, RTX 3060 Ti on Vulkan and then on Direct3D 12, Intel Iris Xe), plus a GTX 1650 from an earlier board card.
+- All of them were in a match (`scMelee`), most a few seconds after the stage loaded, online.
+- Each came after seconds of swapchain acquires waiting 12-64 ms frame after frame (the GPU falling behind), even on the 4090.
+- All were on v0.7.1 or later. v0.7.0's zips (9 runs on an RTX 3080, an RTX 5070, an RX 9070 GRE) had none.
+
+**The bug.** `gpu::retire_finished_work_without_present` (recomp 26f3108, the minimized-window leak fix, first in v0.7.1) runs after every encoded frame. On a frame that asked for no swapchain image, it submits an empty command buffer with a fence. On the next frame, if the presenter had asked for an image in between, it released that fence without looking at it. With `SDL_SubmitGPUCommandBufferAndAcquireFence` the caller holds the fence's only reference. So a fence released before the GPU reached it went straight back to SDL's pool, and the next submit took it and reset it while it was still pending (`VUID-vkResetFences-pFences-01123`). SDL's Direct3D 12 backend reuses a pooled fence the same way: it signals it back to unsignaled from the CPU.
+- From then on, the newer submit counted as finished when the older one signaled. SDL handed its uniform and transfer buffers to other work, and destroyed objects it held, while the GPU still used them.
+- Frames that ask for no image are a rollback's re-run frames (never presented), and the frames the presenter drops when frame interpolation runs ahead of a GPU that is behind. So the bug fired all the time exactly when the GPU was several frames behind: the start of an online match, and the main menu on a slow GPU with interpolation on.
+
+**Fixed:** the fence is released only once `SDL_QueryGPUFence` says it has signaled; until then the next call checks it again (or waits for it, as before, on a frame with no present). The minimized window (no presents at all) is unchanged.
+
+**How it was found and checked** (RTX 4070, driver 610.88; scripts kept locally in tmp/gpuhang, not committed):
+- Khronos validation layer (the GitHub nightly's `VkLayer_khronos_validation.dll`, through `VK_ADD_LAYER_PATH`, `VK_INSTANCE_LAYERS` and a `vk_layer_settings.txt`; `VK_LOADER_LAYERS_DISABLE=~implicit~` keeps OBS, Overwolf, RivaTuner and Steam's layers out). The harness passes those to recomp instances through `PPHARNESS_RECOMP_ENV`, and video settings through `PPHARNESS_RECOMP_TOML`.
+- Replay 004 through the core's playback with synchronization, thread-safety and GPU-assisted validation: clean, apart from one spec note (SPIR-V 1.3 shaders on the Vulkan 1.0 device SDL makes). Playback has no rollbacks and presents every frame.
+- `test_direct_set_through_netsim` (two recomps, bad Wi-Fi: rollbacks all the time) at 2.25x MSAA 4x under synchronization validation: v0.7.4 had 27 and 52 `VUID-vkResetFences-pFences-01123` errors, all in the matches. The fix had 0 and 0.
+- The same set at 4.5x MSAA 4x with 120 fps interpolation and no validation, which is about #365's settings:
+  - v0.7.4 lost the device in game 1 in 2 of 2 runs: Windows TDRs (Display 4101, nvlddmkm 153).
+  - The same tree as the fix, without it, lost it at the main menu in 1 of 1 runs.
+  - The driver's fault report each time: "invalid read at 0x0" or "invalid write at 0x0".
+  - With the fix: 2 of 2 runs played all 3 games, with no loss and no driver event.
+
+**Not checked:** Direct3D 12 with the fix under the same load, AMD and Intel GPUs, Linux and macOS.
+
+**Still to look at:** a rollback re-runs every frame on the GPU in full, though only the last one's image is ever shown (the hidden advances in runtime/src/brawl_rollback.cpp). Not drawing the earlier ones would cut the GPU's work in a deep rollback from depth + 1 frames to 2.
