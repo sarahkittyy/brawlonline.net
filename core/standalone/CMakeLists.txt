@@ -327,6 +327,10 @@ if(BRAWL_ONLINE_DOLPHIN_INPUT)
   if(WIN32)
     # Dolphin's WGInput over the Windows.Gaming.Input ABI headers (no C++/WinRT in llvm-mingw).
     list(APPEND BO_INPUT_SOURCES "${BO_CORE}/compat/input/WGInput.cpp")
+    # Dolphin's load-time patch for EZFRD64.DLL (cheap gamepads' force feedback driver, which crashes
+    # with its heap above 4 GB once DInput or WGI force feedback loads it). Dolphin.exe installs it from
+    # the CRT's start-up; DolphinPads.cpp does here.
+    list(APPEND BO_INPUT_SOURCES "${BO_COMMON}/CompatPatches.cpp" "${BO_COMMON}/LdrWatcher.cpp")
   endif()
   if(BRAWL_ONLINE_SDL3_TARGET)
     list(APPEND BO_INPUT_SOURCES "${BO_CORE}/compat/input/SdlDevices.cpp")
@@ -335,7 +339,7 @@ if(BRAWL_ONLINE_DOLPHIN_INPUT)
   target_compile_features(brawl_online_dolphin_input PUBLIC cxx_std_23)
   target_link_libraries(brawl_online_dolphin_input PUBLIC brawl_online_common)
   if(WIN32)
-    target_link_libraries(brawl_online_dolphin_input PUBLIC dinput8 dxguid cfgmgr32 setupapi)
+    target_link_libraries(brawl_online_dolphin_input PUBLIC dinput8 dxguid cfgmgr32 setupapi ntdll)
     # MSVC's xinput.h names the DLL (Windows 8 and later); MinGW's does not.
     set_source_files_properties("${BO_IC}/ControllerInterface/XInput/XInput.cpp" PROPERTIES
       COMPILE_DEFINITIONS "XINPUT_DLL=L\"xinput1_4.dll\"")

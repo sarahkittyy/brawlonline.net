@@ -21,10 +21,25 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/ControllerInterface/CoreDevice.h"
 
+#ifdef _WIN32
+#include <windows.h>
+
+// Common/CompatPatches.cpp: EZFRD64.DLL, the force feedback driver of cheap third-party gamepads, gets
+// its heap below 4 GB, else its timer thread crashes on a pointer cut to 32 bits (bug report #367:
+// 0xc0000005 in EZFRD64.dll on winmm's timer thread a few seconds into every start). Dolphin.exe
+// installs this from the CRT's start-up (.CRT$XCZ, MSVC only); here it is this file's start-up, so
+// it is in place before SDL or Dolphin's DInput and WGInput devices can load the driver.
+int __cdecl EnableCompatPatches();
+#endif
+
 namespace BrawlOnline::DolphinPads
 {
 namespace
 {
+#ifdef _WIN32
+[[maybe_unused]] const int s_compat_patches = EnableCompatPatches();
+#endif
+
 std::mutex s_mutex;
 bool s_initialized = false;
 bool s_active = false;
@@ -115,6 +130,10 @@ bool Load(const std::string& user_folder, void* window)
     const WindowSystemInfo wsi(WindowSystemType::Headless, nullptr, window, window);
 #endif
     g_controller_interface.Initialize(wsi);
+#ifdef _WIN32
+    if (GetModuleHandleW(L"EZFRD64.dll"))
+      NOTICE_LOG_FMT(CONTROLLERINTERFACE, "Dolphin's controls: EZFRD64.DLL is loaded (heap kept below 4 GB)");
+#endif
     s_devices_changed = g_controller_interface.RegisterDevicesChangedCallback([] {
       const auto lock = ControllerEmu::EmulatedController::GetStateLock();
       BindAll();
