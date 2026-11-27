@@ -1,7 +1,7 @@
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { FriendRequestResult, InviteResult, SendResult, SocialEvent, SocialState } from "./types";
+import type { FriendRequestResult, HistoryPage, InviteResult, SendResult, SocialEvent, SocialState } from "./types";
 
 export const ipc_socialConnect = makeEndpoint.main("social_connect", <{ uid: string }>_, <SuccessPayload>_);
 
@@ -53,6 +53,12 @@ export const ipc_socialDismissRequestPopup = makeEndpoint.main(
 );
 
 export const ipc_socialMarkRead = makeEndpoint.main("social_markRead", <{ uid: string }>_, <SuccessPayload>_);
+
+export const ipc_socialHistory = makeEndpoint.main(
+  "social_history",
+  <{ uid: string; before: string | null }>_,
+  <{ page: HistoryPage }>_,
+);
 
 export const ipc_socialStateChangedEvent = makeEndpoint.renderer("social_stateChanged", <{ state: SocialState }>_);
 

@@ -2,7 +2,10 @@ import type { AccountsManager } from "@accounts/accounts_manager";
 import { appVersion } from "@common/constants";
 import { PRODUCT_SLUG } from "@common/product";
 import type { DolphinManager } from "@dolphin/manager";
+import { app } from "electron";
+import path from "path";
 
+import { ChatHistory } from "./chat_history";
 import {
   ipc_socialAnswerInvite,
   ipc_socialConnect,
@@ -12,6 +15,7 @@ import {
   ipc_socialEvent,
   ipc_socialFriendAction,
   ipc_socialGetState,
+  ipc_socialHistory,
   ipc_socialInvite,
   ipc_socialMarkRead,
   ipc_socialSendFriendRequest,
@@ -35,6 +39,7 @@ export default function setupSocialIpc({
     userAgent: `${PRODUCT_SLUG}-launcher/${appVersion}`,
     getToken: (uid) => accountsManager.sessionToken(uid),
     onlineDir: () => dolphinManager.netplayOnlineDir(),
+    history: new ChatHistory(path.join(app.getPath("userData"), "chat-history")),
   });
   client.onState((state) => void ipc_socialStateChangedEvent.main!.trigger({ state }));
   client.onEvent((event) => void ipc_socialEvent.main!.trigger({ event }));
@@ -82,5 +87,6 @@ export default function setupSocialIpc({
     client.markRead(uid);
     return { success: true };
   });
+  ipc_socialHistory.main!.handle(async ({ uid, before }) => ({ page: await client.history(uid, before) }));
   return client;
 }

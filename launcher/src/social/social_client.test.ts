@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ChatHistory } from "./chat_history";
 import {
   boxAd,
   dmGroup,
@@ -144,15 +145,18 @@ describe("social client", () => {
   let client: SocialClient;
   let events: SocialEvent[];
   let bob: FakePeer;
+  let history: ChatHistory;
 
   beforeEach(async () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "social-"));
     server = fakeServer();
+    history = new ChatHistory(path.join(dir, "chat-history"));
     client = new SocialClient({
       baseUrl: "http://accounts",
       userAgent: "test",
       getToken: async () => "token",
       onlineDir: () => dir,
+      history,
       fetch: server.fetchFn,
       sleep: async () => undefined,
     });
@@ -168,6 +172,7 @@ describe("social client", () => {
 
   afterEach(async () => {
     client.disconnect();
+    await history.flush();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -304,6 +309,37 @@ describe("social client", () => {
     server.setPostStatus(404);
     expect(await client.sendMessage(BOB, "gone")).toEqual({ ok: false, message: "That player is offline." });
     expect(client.getState().conversations[BOB].lines).toHaveLength(1);
+  });
+
+  it("keeps the conversations on disk and pages back the lines this session doesn't have", async () => {
+    server.send(dmFrom(bob, "first"));
+    await until(() => client.getState().conversations[BOB]?.lines.length === 1);
+    expect(await client.sendMessage(BOB, "second")).toEqual({ ok: true });
+    // Both are in the conversation, so the history has nothing more for the window.
+    expect(await client.history(BOB, null)).toEqual({ lines: [], before: null });
+
+    // The next launch: the conversation starts empty and the history has it.
+    client.disconnect();
+    await client.connect(ME);
+    await until(() => client.getState().status === "connecting");
+    await tick();
+    server.send({ type: "welcome", you: ME, online: [bob.member], room: null });
+    await until(() => client.getState().status === "online");
+    expect(client.getState().conversations[BOB]).toBeUndefined();
+    const page = await client.history(BOB, null);
+    expect(page.lines.map((l) => [l.own, l.text])).toEqual([
+      [false, "first"],
+      [true, "second"],
+    ]);
+    expect(page.before).toBeNull();
+    // A new line this session is the window's already.
+    server.send(dmFrom(bob, "third"));
+    await until(() => client.getState().conversations[BOB]?.lines.length === 1);
+    expect((await client.history(BOB, null)).lines.map((l) => l.text)).toEqual(["first", "second"]);
+    // Nobody else's, and not without an account.
+    expect(await client.history("nope", null)).toEqual({ lines: [], before: null });
+    client.disconnect();
+    expect(await client.history(BOB, null)).toEqual({ lines: [], before: null });
   });
 
   it("ignores: lines stay, no unread, no sound, no invites; shared with the game's file", async () => {

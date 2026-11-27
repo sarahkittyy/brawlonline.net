@@ -2,9 +2,9 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
 import Tooltip from "@mui/material/Tooltip";
-import type { Conversation, SocialPlayer } from "@social/types";
+import type { ChatLine, Conversation, SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { CharacterIcon } from "@/components/profile/character_icon";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -23,6 +23,10 @@ const WINDOW_WIDTH = 300;
 const EDGE = 8;
 /** Longest message, in code points (the cleaner's limit; the bytes limit is checked when sent). */
 const MAX_INPUT = 100;
+/** Older lines are read from disk once the view is this close to their top. */
+const LOAD_OLDER_PX = 200;
+/** A view this close to the bottom follows new lines. */
+const STICK_PX = 24;
 
 /**
  * The bar along the bottom of the window: one tab per conversation, from the left, shrinking to
@@ -63,7 +67,8 @@ export const ChatDock = React.memo(function ChatDock() {
         }
         return (
           <ChatWindow
-            key={tab.uid}
+            // A different account's conversation with the same player has its own history.
+            key={`${state.you ?? ""}:${tab.uid}`}
             player={player}
             conversation={state.conversations[tab.uid]}
             online={state.online.some((p) => p.uid === tab.uid)}
@@ -291,6 +296,109 @@ const ChatLineText = ({ text }: { text: string }) => (
   </>
 );
 
+/**
+ * A chat window's lines: the conversation's history on disk (docs/social-protocol.md §8), read a page
+ * at a time as the view nears the top, then this session's lines. A page read in keeps the view where
+ * it was, and lines the session drops (it keeps the latest 200) stay in the window.
+ */
+function useHistory(uid: string, live: ChatLine[] | undefined, viewRef: React.RefObject<HTMLDivElement>) {
+  const [older, setOlder] = useState<ChatLine[]>([]);
+  /** undefined: nothing read yet; null: the history's start was reached. */
+  const cursor = useRef<string | null | undefined>(undefined);
+  const loading = useRef(false);
+  const alive = useRef(true);
+  /** The view's distance from its bottom before a page went in above it. */
+  const anchor = useRef<number | null>(null);
+  const prevLive = useRef<ChatLine[]>([]);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const loadOlder = useCallback(async () => {
+    const history = window.electron.social.history;
+    if (loading.current || cursor.current === null || !history) {
+      return;
+    }
+    loading.current = true;
+    try {
+      const page = await history(uid, cursor.current ?? null);
+      if (!alive.current) {
+        return;
+      }
+      cursor.current = page.before;
+      if (page.lines.length > 0) {
+        const el = viewRef.current;
+        anchor.current = el ? el.scrollHeight - el.scrollTop : null;
+        setOlder((o) => {
+          const have = new Set(o.map((l) => l.id));
+          return [...page.lines.filter((l) => !have.has(l.id)), ...o];
+        });
+      }
+    } catch {
+      cursor.current = null;
+    } finally {
+      loading.current = false;
+    }
+  }, [uid, viewRef]);
+
+  // The newest page when the window opens.
+  useEffect(() => {
+    void loadOlder();
+  }, [loadOlder]);
+
+  // Lines the session drops from its front go on after the history's (they come next in order).
+  useEffect(() => {
+    const now = live ?? [];
+    const keep = new Set(now.map((l) => l.id));
+    const dropped = prevLive.current.filter((l) => !keep.has(l.id));
+    prevLive.current = now;
+    if (dropped.length > 0) {
+      setOlder((o) => {
+        const have = new Set(o.map((l) => l.id));
+        return [...o, ...dropped.filter((l) => !have.has(l.id))];
+      });
+    }
+  }, [live]);
+
+  // After a page went in: back where the view was, and another page while the window isn't full.
+  useLayoutEffect(() => {
+    const el = viewRef.current;
+    if (!el) {
+      return;
+    }
+    if (anchor.current !== null) {
+      el.scrollTop = el.scrollHeight - anchor.current;
+      anchor.current = null;
+    }
+    if (el.scrollTop < LOAD_OLDER_PX && cursor.current) {
+      void loadOlder();
+    }
+  }, [older, loadOlder, viewRef]);
+
+  const all = useMemo(() => {
+    const now = live ?? [];
+    const liveIds = new Set(now.map((l) => l.id));
+    return [...older.filter((l) => !liveIds.has(l.id)), ...now];
+  }, [older, live]);
+
+  const onScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget;
+      el.dataset.stuck = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX ? "1" : "0";
+      if (el.scrollTop < LOAD_OLDER_PX) {
+        void loadOlder();
+      }
+    },
+    [loadOlder],
+  );
+
+  return { all, onScroll };
+}
+
 const ChatWindow = ({
   player,
   conversation,
@@ -314,8 +422,9 @@ const ChatWindow = ({
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const linesRef = useRef<HTMLDivElement>(null);
-  const lines = conversation?.lines ?? [];
+  const live = conversation?.lines;
   const unread = conversation?.unread ?? 0;
+  const lines = useHistory(player.uid, live, linesRef);
 
   // Typing goes to the window in front (see takesTyping); a click inside the window leaves the
   // focus where the click put it (e.g. selecting text).
@@ -327,13 +436,15 @@ const ChatWindow = ({
     raisedByPointer.current = false;
   }, [front]);
 
-  // Newest at the bottom, scrolled to.
+  // Newest at the bottom, scrolled to: unless the player scrolled up to read, a line of theirs
+  // brings them back.
+  const newest = live?.[live.length - 1];
   useLayoutEffect(() => {
     const el = linesRef.current;
-    if (el) {
+    if (el && (newest?.own || el.dataset.stuck !== "0")) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [lines.length]);
+  }, [newest?.id, newest?.own]);
 
   // Read while open and the launcher has focus.
   useEffect(() => {
@@ -408,8 +519,8 @@ const ChatWindow = ({
           </button>
         </Tooltip>
       </div>
-      <div className={styles.lines} ref={linesRef}>
-        {lines.map((line) => {
+      <div className={styles.lines} ref={linesRef} onScroll={lines.onScroll}>
+        {lines.all.map((line) => {
           if (!line.own && ignored && !revealed.has(line.id)) {
             return (
               <Tooltip key={line.id} title={Messages.showMessage()} placement="right" disableInteractive={true}>

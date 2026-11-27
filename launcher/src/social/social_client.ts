@@ -15,6 +15,7 @@ import { characterName, countryName } from "@common/profile";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
 
+import type { ChatHistory } from "./chat_history";
 import { cleanBytes, cleanText, MAX_NAME_CODE_POINTS } from "./chat_text";
 import {
   boxAd,
@@ -54,6 +55,7 @@ import type {
   Friend,
   FriendRequestResult,
   FriendsState,
+  HistoryPage,
   Invite,
   InviteResult,
   QueueState,
@@ -99,6 +101,8 @@ export type SocialClientDeps = {
   userAgent: string;
   getToken: (uid: string) => Promise<string | undefined>;
   onlineDir: () => string;
+  /** Where conversations are kept across launches (none: they last as long as the client). */
+  history?: ChatHistory;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -708,6 +712,9 @@ export class SocialClient {
   }
 
   private addLine(player: SocialPlayer, line: ChatLine, unread: boolean) {
+    if (this.uid) {
+      this.deps.history?.append(this.uid, player.uid, line);
+    }
     const prev = this.state.conversations[player.uid];
     const lines = [...(prev?.lines ?? []), line].slice(-MAX_LINES);
     const conv: Conversation = {
@@ -1015,6 +1022,19 @@ export class SocialClient {
     if (c?.unread) {
       this.update({ conversations: { ...this.state.conversations, [uid]: { ...c, unread: 0 } } });
     }
+  }
+
+  /** A page of a conversation's history on disk, without the lines the conversation has now. */
+  async history(uid: string, before: string | null): Promise<HistoryPage> {
+    const me = this.uid;
+    if (!me || !this.deps.history || !isUid(uid) || (before !== null && typeof before !== "string")) {
+      return { lines: [], before: null };
+    }
+    return this.deps.history.page(me, uid, before, () => {
+      // Read once the writes before it are done, so lines that arrived meanwhile are left out too.
+      const lines = this.uid === me ? this.state.conversations[uid]?.lines ?? [] : [];
+      return new Set(lines.map((l) => l.id));
+    });
   }
 
   // ---------------------------------------------------------------- sending

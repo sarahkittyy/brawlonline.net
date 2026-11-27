@@ -1,4 +1,4 @@
-import type { SocialPlayer, SocialState } from "@social/types";
+import type { ChatLine, HistoryPage, SocialPlayer, SocialState } from "@social/types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -80,6 +80,42 @@ export const OverlappingWindows = () => {
     for (const p of players) {
       useSocial.getState().openTab(p.uid, true);
     }
+  }, []);
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+      <ServiceProvider>
+        <ChatDock />
+      </ServiceProvider>
+    </div>
+  );
+};
+
+/** Bob's history on disk: 1,000 older lines, read 50 at a time as the window is scrolled up. */
+const bobHistory: ChatLine[] = Array.from({ length: 1000 }, (_, i) => ({
+  id: `old-${i}`,
+  own: i % 3 === 0,
+  text: `${i + 1}`,
+  at: i,
+}));
+
+export const LongHistory = () => {
+  useEffect(() => {
+    (window as any).electron = {
+      ...(window as any).electron,
+      social: {
+        markRead: async () => {},
+        sendMessage: async () => ({ ok: true }),
+        invite: async () => ({ ok: false }),
+        history: async (uid: string, before: string | null): Promise<HistoryPage> => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const end = uid === "bob" ? (before === null ? bobHistory.length : Number(before)) : 0;
+          const start = Math.max(0, end - 50);
+          return { lines: bobHistory.slice(start, end), before: start > 0 ? String(start) : null };
+        },
+      },
+    };
+    useSocial.setState({ state, tabs: [] });
+    useSocial.getState().openTab("bob", true);
   }, []);
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>

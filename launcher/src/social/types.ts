@@ -48,6 +48,12 @@ export type ChatLine = {
   at: number;
 };
 
+/**
+ * Older lines of a conversation, from the history on disk (docs/social-protocol.md §8), oldest
+ * first. `before` asks for the page older than this one; null once the history's start is reached.
+ */
+export type HistoryPage = { lines: ChatLine[]; before: string | null };
+
 export type Conversation = {
   player: SocialPlayer;
   lines: ChatLine[];
@@ -194,6 +200,11 @@ export interface SocialApi {
   /** Closes a request's pop-up (the request stays in Friends > Requests). */
   dismissRequestPopup(uid: string): Promise<void>;
   markRead(uid: string): Promise<void>;
+  /**
+   * A page of the conversation's history from disk: `before` null for the newest page (the lines
+   * the conversation has this session left out), else the last page's `before`.
+   */
+  history(uid: string, before: string | null): Promise<HistoryPage>;
   onStateChange(handle: (state: SocialState) => void): () => void;
   onEvent(handle: (event: SocialEvent) => void): () => void;
 }

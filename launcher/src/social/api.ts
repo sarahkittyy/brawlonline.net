@@ -8,6 +8,7 @@ import {
   ipc_socialEvent,
   ipc_socialFriendAction,
   ipc_socialGetState,
+  ipc_socialHistory,
   ipc_socialInvite,
   ipc_socialMarkRead,
   ipc_socialSendFriendRequest,
@@ -71,6 +72,10 @@ const socialApi: SocialApi = {
   },
   async markRead(uid) {
     await ipc_socialMarkRead.renderer!.trigger({ uid });
+  },
+  async history(uid, before) {
+    const { result } = await ipc_socialHistory.renderer!.trigger({ uid, before });
+    return result.page;
   },
   onStateChange(handle) {
     const { destroy } = ipc_socialStateChangedEvent.renderer!.handle(async ({ state }) => {
