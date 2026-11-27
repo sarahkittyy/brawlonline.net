@@ -51,7 +51,9 @@ start_runner() { # <dir>
   if [ -f "$d/runner.log" ] && [ "$(stat -f %z "$d/runner.log")" -gt 5000000 ]; then
     mv -f "$d/runner.log" "$d/runner.log.1"
   fi
-  (cd "$d" && exec ./run.sh) >>"$d/runner.log" 2>&1 &
+  # The runner reads .env itself, but .path only in service mode (bin/runsvc.sh); run.sh keeps
+  # the caller's PATH, which under launchd has no ~/runners/bin.
+  (cd "$d" && { [ ! -s .path ] || export PATH="$(cat .path)"; } && exec ./run.sh) >>"$d/runner.log" 2>&1 &
   echo $! >"$d/.supervisor-pid"
   log "started $(basename "$d") (pid $!)"
 }
