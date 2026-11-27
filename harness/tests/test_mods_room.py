@@ -198,11 +198,13 @@ def test_a_join_while_the_players_games_differ_says_why(backend: OnlineBackend,
     25 MB machine image and then refused it ("player 2 does not vouch for this machine"); the
     players saw "could not join" and nothing more, until that player left. Here the first joiner's
     game is made to differ from the host's (a word of free RAM written on it only), and a second
-    joiner is refused at the epoch with why, before any image is sent."""
+    joiner is refused at the epoch with why, before any image is sent. With PPR_MACHINE_OWN_GAMES=0
+    on the host: by default a player whose game is its own does not keep a joiner out (the next
+    test), so this is what a room does when two sides differ or the joiner's build is older."""
     host_user = backend.create_user("hostd", "HSTD")
     one_user = backend.create_user("joind", "JNYD")
     two_user = backend.create_user("joine", "JNYE")
-    host, code = _host(dolphin, backend, "mods-differ-host", host_user)
+    host, code = _host(dolphin, backend, "mods-differ-host", host_user, env={"PPR_MACHINE_OWN_GAMES": "0"})
     one = _boot(dolphin, backend, "mods-differ-join1", one_user,
                 {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
     _wait(lambda: "machine: running" in _log(one), 90, "the first joiner's session running", interval=1)
@@ -230,6 +232,50 @@ def test_a_join_while_the_players_games_differ_says_why(backend: OnlineBackend,
     # are not a line each (60 between two notices).
     assert len(re.findall(r"machine: player 2 is at epoch \d+ with checksum", host_log)) == 1, host_log[-3000:]
     assert len(re.findall(r"machine: desync at frame", host_log)) <= 60 * (host_log.count("notice: Desync with") + 1)
+
+
+def test_a_player_whose_game_is_its_own_does_not_keep_a_joiner_out(backend: OnlineBackend,
+                                                                    dolphin: Callable[..., DolphinInstance]) -> None:
+    """A report of 2026-11-23 (a TvC room): while one player ran Continuo's music or win counter, a
+    tool outside Dolphin that writes into the game's memory, no third player could join until that
+    player left the room and joined again. Those writes are in no per-frame checksum, so the two
+    players play on, but that player's machine image differs. Now the joiner takes the host's game
+    without that player's word and plays with it as the host does. Here the first joiner's game
+    differs by a word of free RAM written as such a tool writes (no rollback dirty marks: only the
+    sweep of all memory every 360 frames sees it, as a desync)."""
+    host_user = backend.create_user("hosto", "HSTO")
+    one_user = backend.create_user("joino", "JNYO")
+    two_user = backend.create_user("joinp", "JNYP")
+    host, code = _host(dolphin, backend, "mods-own-host", host_user)
+    one = _boot(dolphin, backend, "mods-own-join1", one_user,
+                {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    _wait(lambda: "machine: running" in _log(one), 90, "the first joiner's session running", interval=1)
+    host_word = host.client.call("read_mem", addr=0x80002F10, len=4)["hex"]
+    assert host_word != "0badf00d"
+    one.client.call("write_mem", addr=0x80002F10, hex="0badf00d", dirty=False)
+    two = _boot(dolphin, backend, "mods-own-join2", two_user,
+                {"join": code, "build": BUILD, "controller": "gc", "sd_sync": "yes"})
+    _wait(lambda: "machine: running" in _log(two), 180, "the second joiner's session running", interval=1)
+    host_log, two_log = _log(host), _log(two)
+    assert re.search(r"player 3 joins: the game of .+ differs from this one, each its own", host_log), \
+        host_log[-3000:]
+    assert "cannot join" not in host_log, host_log[-3000:]
+    assert "player 2's game is its own" in two_log, two_log[-3000:]
+    # The first joiner keeps its own game; the second has the host's.
+    assert one.client.call("read_mem", addr=0x80002F10, len=4)["hex"] == "0badf00d"
+    assert two.client.call("read_mem", addr=0x80002F10, len=4)["hex"] == host_word
+    for inst in (host, one, two):
+        _wait(lambda: inst.client.call("machine_status").get("phase") == "running", 30, "the game going on")
+        assert inst.client.call("machine_status").get("players") == 7
+    # The checksum that sweeps all of memory every 360 frames sees that word: the host and the first
+    # joiner desync there, and the second joiner with the first just as the host does. With the word
+    # put back on the first joiner, the three machines are one: no more desyncs over two sweeps.
+    one.client.call("write_mem", addr=0x80002F10, hex=host_word, dirty=False)
+    time.sleep(1)
+    before = [inst.client.call("machine_status").get("desyncs") or 0 for inst in (host, one, two)]
+    time.sleep(13)
+    after = [inst.client.call("machine_status").get("desyncs") or 0 for inst in (host, one, two)]
+    assert after == before, (before, after)
 
 
 def _watch(inst: DolphinInstance, seen: dict[str, float], t0: float) -> None:

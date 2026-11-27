@@ -42,7 +42,7 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `ping` | — | `{"pong": true, "version": 1}` |
 | `status` | — | `{"state": "uninitialized"\|"starting"\|"running"\|"paused"\|"stopping", "frame": n, "input_polls": n, "game_id": str, "cpu_thread": bool, "video_backend": str, "netplay": null \| {...see netplay_status}}`, plus `poll_source`, `si_polls`, `audio_muted` and `presentation` (see "Presentation counters" below) |
 | `read_mem` | `addr`, `len` (≤ 16 MiB) | `{"hex": "..."}`. Effective (virtual) addresses `0x80000000–0x817FFFFF` (MEM1) and `0x90000000–0x93FFFFFF` (MEM2) |
-| `write_mem` | `addr`, `hex` | `{}` |
+| `write_mem` | `addr`, `hex`, optional `dirty` (default true; false writes as a tool outside Dolphin does: no rollback dirty marks) | `{}` |
 | `read_u32` | `addr` | `{"value": n}` (big-endian, as the game sees it) |
 | `hash_mem` | `ranges`: `[[addr, len], ...]` | `{"xxh3_64": "16 hex chars"}`, one hash over all ranges concatenated in order |
 | `pad_set` | `port` 0–3, `buttons`: list of `A B X Y Z L R START DUP DDOWN DLEFT DRIGHT`, `main`: `[x,y]` 0–255 (default 128,128), `c`: `[x,y]`, `l`: 0–255, `r`: 0–255 | `{}`. Persistent override of that port until `pad_clear` |
