@@ -463,3 +463,26 @@ Recomp `brawlonline/device-lost` a2613b4, merged into `brawlonline/windows-build
 **Bounds checking.** SDL left Vulkan's `robustBufferAccess` off; it is on now wherever the device has it (an SDL patch), so a shader's read past a bound buffer (aurora pulls vertices out of storage buffers by the game's indices) reads zeros instead of faulting the GPU, as on Direct3D 11 and 12 (Dolphin's D3D11 on the same NVIDIA cards loses no device). Cost on an RTX 4070, replay 004 at 4.5x and MSAA 4x (#365's settings), the process's 3D engine use, 3 runs each alternated: **4.36 ms of GPU a frame with it, 4.30 without** (+0.05 ms, inside the runs' own spread of 4.24-4.38); memory the same. `AURORA_GFX_FLAGS=norobust` turns it off.
 
 **Checked** (corpus replay 004 through the core's playback, every frame's gameplay checksum against the file's; `AURORA_TEST_DEVICE_LOST_AFTER_SUBMITS=N`, now on each of the first `AURORA_TEST_DEVICE_LOST_TIMES` devices): one loss mid-match: 6,558 of 6,558 frames in sync, screenshots with the picture, the notice and the name tags back; two losses, the second onto Direct3D 12: in sync, the file written, the next start on Direct3D 12 first; four losses: Vulkan, Direct3D 12, Direct3D 12, then the close with exit code 0x4c. **Not checked:** a real driver reset or GPU fault (so not what the fault report says), a live online session through a loss (to the session the pause is a hitch like a settings change's), AMD or Intel GPUs, the Linux and macOS builds.
+
+## 21. A lost device on Direct3D 12 (bug report #369, 2026-11-27)
+
+Recomp db94c4b on `brawlonline/windows-build` (local, not pushed, not released).
+
+**The report.** "The game kicks me out of ranked, with error code 0x1": an RTX 3060 Ti (driver 560.94) whose driver reset three times in 7 minutes (nvlddmkm 153 in the same seconds as each exit). Section 20's recovery took the first reset, on Vulkan, onto Direct3D 12, and Automatic picked Direct3D 12 first from then on. Each later reset, now on Direct3D 12, crashed with exit code 1 inside SDL3.dll, on the frame worker: `D3D12_PushVertexUniformData` (read 0x8) or `D3D12_INTERNAL_BindGraphicsResources` (read 0x0).
+
+**Why.** SDL's D3D12 backend maps a uniform buffer each time a command buffer takes one. On a removed device that Map fails, the acquire returns NULL, and the push and the bind read through it. A failed `Present` set no error either, so aurora logged "Failed to submit a command buffer: " with no text and never saw the loss.
+
+**Fixed (SDL patches in AuroraSDL3Patches.cmake):**
+- With no uniform buffer, a push or a bind does nothing (the device's commands are thrown away anyway).
+- A failed `Present` sets its error, and any error whose HRESULT is a removal (DEVICE_REMOVED, HUNG, RESET, DRIVER_INTERNAL_ERROR) ends in `[DXGI_ERROR_DEVICE_REMOVED]`, which aurora's `names_lost_device` looks for. SDL swaps the code for the removal reason, and that reason's system text doesn't say the device is gone.
+- `D3D12_Submit` no longer returns holding `submitLock` when a command list fails to close.
+- aurora's `write_buffer`/`write_texture` no longer copy into a failed map.
+
+**Test hook.** `WIICOMPILED_TEST_D3D12_REMOVE_DEVICE_AFTER_SUBMITS=N` calls `ID3D12Device5::RemoveDevice` at the Nth submit. That is a real removal, for this process only (no TDR).
+
+**Checked** on an RTX 4070: the v0.7.4 release with only SDL3.dll swapped, corpus replay 004 on Direct3D 12, the device removed mid-match.
+- SDL with only the hook crashes exactly as the report does (empty submit error, then 0xc0000005 read 0x8 in `D3D12_PushVertexUniformData`, exit code 1).
+- With the fixes, a new device comes in ~0.5 s. Two runs rebuilt onto Direct3D 12 and one onto Vulkan: while the removed device is still alive, D3D12 says "unsupported", because a process gets one device per adapter, and the other API took over.
+- Two of the three played 6,558 of 6,558 frames in sync. In the first run the playback stood still at frame 3170 after the rebuild (the game thread waiting at the playback's loop top, not in the GPU). It didn't happen again, and a run without removal passed.
+
+**Not checked:** a real driver reset on Direct3D 12, and a live online session through one.
