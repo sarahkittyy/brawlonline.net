@@ -31,6 +31,14 @@
 // its return address (the stub's bl) and, when they are 3.2.1's pair, writes 3.2.0's order back,
 // once, before the hook runs. It uses r0 (here a copy of LR, already saved by the stub), r12, CTR
 // and cr0, which the hook may clobber anyway. Stubs in 3.2.0's order are left alone.
+//
+// The same fix is also made as soon as sy_core has placed each stub (fixStub): for a hook in
+// main.dol right after sy_core made it, for one in a module once sy_core has patched the module
+// (our module load callback runs after sy_core's). Then no stub changes while it runs: code that
+// was translated ahead of time from the stub's words (EmissaryRecomp's code variants) ran the
+// rest of the stub as it was before the fix and gave the title's state LR (bug report #368: back
+// to the title from the main menu, a black screen for good). fixInlineStub stays for a stub this
+// does not reach (a hook in a module that was loaded before ours was made).
 #include <OS/OSCache.h>
 #include <OS/OSError.h>
 #include <gf/gf_file_io_handle.h>
@@ -101,6 +109,49 @@ namespace Loader {
             "bctr\n\t");
     }
 
+    const u32 LWZ_R0_8 = 0x80010008;    // lwz r0,0x8(r1)
+    const u32 LWZ_R0_94 = 0x80010094;   // lwz r0,0x94(r1)
+
+    // fixInlineStub's fix, made where sy_core placed the stub: `target` holds sy_core's "b stub"
+    // (to the stub's original instruction, then sy_core's InlineHook::instructions), and the stub's
+    // bl to `thunk` is 0x18 bytes in. Anything else (not patched yet, not our stub) is left alone.
+    static void fixStub(u32 target, const void* thunk)
+    {
+        if (!thunk) return;
+        const u32 b = *(const u32*)target;
+        if ((b & 0xFC000003) != 0x48000000) return;
+        s32 disp = (s32)(b & 0x03FFFFFC);
+        if (disp & 0x02000000) disp -= 0x04000000;
+        u32* bl = (u32*)(target + disp) + 6;
+        if (*bl != (0x48000001 | (((u32)thunk - (u32)bl) & 0x03FFFFFC))) return;
+        if (bl[1] != LWZ_R0_8 || bl[3] != LWZ_R0_94) return;   // v3.2.0's order already
+        bl[1] = LWZ_R0_94;
+        bl[3] = LWZ_R0_8;
+        DCFlushRange(bl, 16);
+        ICInvalidateRange(bl, 16);
+    }
+
+    // Our inline hooks in modules: sy_core patches them in when the module loads.
+    struct RelHook {
+        u32 offset;
+        int moduleId;
+        const void* thunk;
+    };
+    static RelHook s_relHooks[THUNKS];
+    static int s_relUsed = 0;
+
+    // Subscribed after sy_core's own module load callback, so it runs once sy_core has patched the
+    // module's hooks in (sy_core's doPatchesOnModule: a module hook's target is its offset + .text).
+    static void onModuleLoaded(void* p)
+    {
+        gfModuleHeader* header = ((gfModuleInfo*)p)->m_module->header;
+        const u32 text = header->getTextSectionAddr();
+        for (int i = 0; i < s_relUsed; i++) {
+            if (s_relHooks[i].moduleId == (int)header->id)
+                fixStub(text + s_relHooks[i].offset, s_relHooks[i].thunk);
+        }
+    }
+
     static const void* thunk(const void* target, bool inlineHook = false)
     {
         u32 t = (u32)target;
@@ -127,11 +178,20 @@ namespace Loader {
     public:
         virtual void syInlineHook(const u32 address, const void* replacement)
         {
-            s_api->syInlineHook(address, thunk(replacement, true));
+            const void* t = thunk(replacement, true);
+            s_api->syInlineHook(address, t);
+            fixStub(address, t);   // sy_core patches a hook in main.dol at once
         }
         virtual void syInlineHookRel(const u32 offset, const void* replacement, int moduleId)
         {
-            s_api->syInlineHookRel(offset, thunk(replacement, true), moduleId);
+            const void* t = thunk(replacement, true);
+            s_api->syInlineHookRel(offset, t, moduleId);
+            if (t && s_relUsed < THUNKS) {
+                RelHook& h = s_relHooks[s_relUsed++];
+                h.offset = offset;
+                h.moduleId = moduleId;
+                h.thunk = t;
+            }
         }
         virtual void sySimpleHook(const u32 address, const void* replacement)
         {
@@ -213,6 +273,7 @@ namespace Syringe {
     const PluginMeta* _prolog(CoreApi* api)
     {
         Loader::s_api = api;
+        api->moduleLoadEventSubscribe(Loader::onModuleLoaded);   // after sy_core's (syInit)
         Loader::loadPlugin();
         return &META;
     }
