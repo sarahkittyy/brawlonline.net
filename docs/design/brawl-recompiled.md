@@ -559,3 +559,22 @@ shown for both arms, presents on time, the GPU late). The controller would need 
 in the last 5.5-8 ms before a frame's boundary (they roll back in the next frame's sleep instead of making this frame
 late); that tail is what the hold waits for, in Dolphin's Brawl too. And a late frame could be covered by one more
 predicted picture of the frame before, instead of every frame waiting for it.
+
+## 24. Dolphin HD texture packs (bug report #374, 2026-11-27)
+
+"Hd portraits dont load on emissary" (LUIG#1, v0.7.4). The recomp reads Dolphin-named textures (`tex1_<w>x<h>[_m]_<texture
+hash>[_<palette hash>]_<format>`, .png or .dds) from `UserData/texture_replacements`, `UserData/Load/Textures` and
+`UserData/mods/*/textures`, once at start (Config.toml `[video] texture_replacements`, on by default;
+`texture_dumps = true` writes each unmatched texture to `UserData/Cache/texture_dumps` under the name it needs). The
+reporter's pack indexed 4703 files and the CSS's other textures matched; the portraits (128x160 CI8) never did.
+
+A palette texture's name hashes the part of the palette it uses. Aurora took the palette from its own mirror of the TLUT
+slots, which follows only GXInitTlutObj -> GXLoadTlut on one host object; Brawl's NW4R code fills the portraits' TLUT
+object inline and reuses it, and deferred native draws load a copy, so the mirror had nothing there: palette hash 0, no
+match, and no dump either. Recomp `brawlonline/hd-portraits` f331bb6 (merged into `brawlonline/windows-build` af3786f,
+local, not pushed, not released) hashes the palette the renderer decodes the texture with. Harness check: Dolphin and
+the new build dump the same 18 portrait names, the old build none; a PNG named after Dolphin's dump replaces Mario's
+portrait in P1's panel.
+
+Not done: the launcher doesn't share the netplay Dolphin's `Load/Textures` with the recomp (as it shares the NAND save),
+so a pack has to be copied into the recomp's `UserData` by hand.
