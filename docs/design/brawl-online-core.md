@@ -405,7 +405,8 @@ Sarah (2026-11-23): "definitely need ... spectating / mp4 clip rendering / repla
 
 | What | Where, for a recomp player | Why |
 |---|---|---|
-| Replays tab, Highlights (the clip hotkey's clips, manual clips), Render to MP4, the Spectate tab and its spectator chat | the launcher's playback Dolphin, as for every player | The launcher routes only Play by engine (`playProjectPlusWith`); replays, highlights, renders and spectating always open the playback Dolphin, which ships with the launcher and is installed for recomp players too. The files are the same either way (the recomp's recorder and uploader are the core's), and Dolphin plays, seeks, clips and renders a recomp's replay as it does its own (checked below). It shares the SD card the open game booted (`inUse`), the recomp included. |
+| Replays tab (and a .brep opened from the desktop), Highlights (the clip hotkey's clips, manual clips), the Spectate tab and its spectator chat, Auto play's next game | EmissaryRecomp's playback program, since 2026-11-27 (§12.1); before, the launcher's playback Dolphin | Sarah's board, 2026-11-27: "trying to spectate a game in the spectate tab opens dolphin even though i have emissary set. be sure to go through all the other ui -> game flows". |
+| Render to MP4 (highlights, manual clips) | the launcher's render Dolphin, for every player | The recomp can't render (below). The render Dolphin has no window, and Dolphin renders a recomp's replay as it does its own (checked below). |
 | Watching the room's game (sitters, mid-game joiners) | inside the recomp's own running game | It runs in the netplay process: RoomWatch moved into the core (below). |
 | Seeking | the playback Dolphin's keyframes; in the recomp, the core's (below) | Room watch's overlay has the seek bar and Go Live, so the recomp needed keyframes; replays the recomp plays itself (BRAWL_ONLINE_REPLAY_COMM) seek with them too. |
 
@@ -444,6 +445,26 @@ After merging brawlonline/windows-build (733667d: room CSS panel texts, Discord 
 Found and fixed on the way: a short B (8 polls) on an all-recomp room watch did nothing: the watch flipped between playing and buffering at the stream's start, and the recomp noted START/B only in its standing-still reads, so a press read by a played frame was missed; FrameInput::SampleLocal now notes them at every read.
 
 Seen on the shared PC while testing (not from these changes): loopback stalls (harness, Postgres and mm connections timing out for minutes; a monitor of its own saw 10 s connect timeouts on 127.0.0.1, and on ::1 too, at the same moments), dolphin.log writes of 6-7 s with instances on E:, after which a recomp's mm connection dropped 3.5 s after a game and the rest of its upload never went (an upload does not survive a reconnect, Dolphin's neither); and the LG and AORUS monitors leaving the display topology (asleep), the TV becoming the primary display: recomp windows then waited up to 25 s on a swapchain image, and once aurora's presentation thread raised 0xC00000FF (a C++ unwind through the Vulkan driver's frames).
+
+### 12.1 Replays and spectating in the recomp (2026-11-27)
+
+Until now the launcher sent only Play to the recomp: replays, highlights and spectated games always opened the playback Dolphin, though the recomp could play them itself (BRAWL_ONLINE_REPLAY_COMM, above). Sarah's board: "trying to spectate a game in the spectate tab opens dolphin even though i have emissary set. be sure to go through all the other ui -> game flows to make sure this isn't an issue anywhere else, too".
+
+**Every place the launcher starts a game:**
+
+| From | Plays in, with "Play Project+ with: EmissaryRecomp" |
+|---|---|
+| Play (header, Play page, sidebar), invites, rooms, Create room, the queues, a ruleset's play link, the P+ card dialog's Play | the recomp already: all reach `manager._launchNetplayDolphin` (a "Launch Dolphin" Play button opens Dolphin without a game, as it says) |
+| Replays tab, a .brep opened from the desktop, Highlights, the Spectate tab, a friend's or a room link's Watch, Auto play's next game | the recomp now: all reach `manager._launchPlaybackDolphin` (ids `playback` and the spectate client's) |
+| Render to MP4, Configure (Dolphin's settings) | Dolphin (no recomp renderer; Configure is Dolphin's) |
+| Other Games, Project Punch, Brawl Mods | Dolphin (Sarah, 2026-11-19) |
+| Room watch (sitters, mid-game joiners) | inside the open game, recomp or Dolphin (§12) |
+
+**How.** `_launchPlaybackDolphin` picks the engine per start (`playbackEngines`): the recomp unless it's a render or Configure, or Play plays with Dolphin. An open playback started for the other engine is closed and started again (as for another P+ release). The recomp runs from `<emissary-recomp>/playback/versions/<tag>/`: hard links of the installed version's files (no copy; linked again when another version or a reinstall is current) under a `portable.txt` and `UserData` of its own, so a replay or a spectated game can play while Play's recomp is open (in a queue, in a room) without either one touching the other's NAND, card link or settings. Its UserData starts from Play's (`seedPlaybackUserData`): Config.toml copied at each start (a change made in a replay's window isn't kept), Play's shader caches when they are newer, and a link to Play's `texture_replacements`. Then `prepareEmissaryLaunch` as for Play, with the playback Dolphin's User folder as the core's (BRAWL_ONLINE_CORE: its settings with Music, chat and the input display, its Brawl save, `Spectate/`, its logs) and the card the playback Dolphin would boot (the launcher's release's, or the replay's older P+ release's). The comm file goes in BRAWL_ONLINE_REPLAY_COMM instead of `-i` (`PlaybackDolphinInstance`'s `commEnv`); the status, chat, spectator list and overlay files next to it are the same.
+
+It falls back to the playback Dolphin, with the reason in the launcher's log ("Playing back in Dolphin, not EmissaryRecomp: ..."), when the recomp is not installed, its game files are not the Settings disc's, the release can't play online, or its program lacks BRAWL_ONLINE_REPLAY_COMM (`features.playback`, read at install, or once for records from before). No download first: a replay doesn't wait for one (Play updates). Settings > Add-ons' Remove refuses while it plays ("Close EmissaryRecomp first."), as while Play's runs. Bug report zips have its logs as `emissary-recomp-playback/`.
+
+**Checked** with the released v0.7.5 on this PC, started from a scratch copy of the install set up by these functions (prepareForPlayback, seedPlaybackUserData, prepareEmissaryLaunch) as manager._emissaryPlayback does: Sarah's replay of today (Room G12, Smashville) played in the Emissary window at 60 fps, no desync, and closed on WM_CLOSE with exit 0; a spectated game (Room G9, 76 KB) written out over a minute as a live stream (`mirror`) was followed from loading through waiting and playing to its end (8,547 frames, no desync), then asked to be closed (`close`, closeOnEnd). Not checked: the launcher itself clicking through (its dev build was not started), macOS and Linux.
 
 ## 13. Everything together for rc.2 (2026-11-24, board card 762)
 

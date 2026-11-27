@@ -1,6 +1,6 @@
 import type { AccountsManager } from "@accounts/accounts_manager";
 import { IsoValidity } from "@common/types";
-import { EMISSARY_FOLDER } from "@dolphin/emissary/emissary";
+import { EMISSARY_FOLDER, EMISSARY_PLAYBACK_FOLDER } from "@dolphin/emissary/emissary";
 import { patchedSdCardFolder } from "@dolphin/install/paths";
 import { describeSdCard, PATCHED_SD_IMAGE_NAME } from "@dolphin/install/sd_card";
 import type { DolphinManager } from "@dolphin/manager";
@@ -271,6 +271,13 @@ async function logFiles(
         path.join(dolphinManager.netplayFolder(), EMISSARY_FOLDER, "UserData"),
         dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).userFolder,
         "emissary-recomp",
+        BUG_REPORT_MAX_FILE_BYTES,
+      )),
+      // Its replays and spectated games (EMISSARY_PLAYBACK_FOLDER), whose core is the playback Dolphin's.
+      ...(await emissaryFiles(
+        path.join(dolphinManager.netplayFolder(), EMISSARY_FOLDER, EMISSARY_PLAYBACK_FOLDER, "UserData"),
+        dolphinManager.getInstallation(DolphinLaunchType.PLAYBACK).userFolder,
+        "emissary-recomp-playback",
         BUG_REPORT_MAX_FILE_BYTES,
       )),
     );

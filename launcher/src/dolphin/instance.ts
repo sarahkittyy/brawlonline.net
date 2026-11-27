@@ -41,6 +41,13 @@ const generateTempCommunicationFile = (): string => {
   return commFileFullPath;
 };
 
+export type SpawnOptions = {
+  env?: Record<string, string>;
+  cwd?: string;
+  /** No pipes for its output (EmissaryRecomp keeps its own console.log, and writes a lot). */
+  ignoreOutput?: boolean;
+};
+
 export class DolphinInstance extends EventEmitter {
   protected process: ChildProcess | null = null;
   private executablePath: string;
@@ -51,16 +58,7 @@ export class DolphinInstance extends EventEmitter {
    * Unlike Slippi we do not pass `-b`: P+'s launcher DOL hands over to the disc, and batch mode
    * must not treat that hand-over as the end of emulation.
    */
-  constructor(
-    execPath: string,
-    baseParams: string[] = [],
-    private readonly spawnOptions: {
-      env?: Record<string, string>;
-      cwd?: string;
-      /** No pipes for its output (EmissaryRecomp keeps its own console.log, and writes a lot). */
-      ignoreOutput?: boolean;
-    } = {},
-  ) {
+  constructor(execPath: string, baseParams: string[] = [], private readonly spawnOptions: SpawnOptions = {}) {
     super();
     this.baseParams = [...baseParams];
     this.executablePath = execPath;
@@ -184,9 +182,23 @@ export class PlaybackDolphinInstance extends DolphinInstance {
   onStatus: ((status: ReplayPlaybackStatus) => void) | null = null;
   private lastStatusText = "";
 
-  constructor(execPath: string, baseParams: string[] = []) {
-    super(execPath, baseParams);
-    this.commPath = generateTempCommunicationFile();
+  /** The comm file is in this environment variable, not on the command line (`-i`). */
+  private readonly commEnv: string | null;
+
+  /**
+   * `commEnv`: the program reads the comm file's path from this environment variable instead of
+   * `-i <comm file>` (EmissaryRecomp: BRAWL_ONLINE_REPLAY_COMM); the rest of the files are the same.
+   */
+  constructor(execPath: string, baseParams: string[] = [], opts: SpawnOptions & { commEnv?: string } = {}) {
+    const commPath = generateTempCommunicationFile();
+    const { commEnv, ...spawnOptions } = opts;
+    super(
+      execPath,
+      baseParams,
+      commEnv ? { ...spawnOptions, env: { ...spawnOptions.env, [commEnv]: commPath } } : spawnOptions,
+    );
+    this.commPath = commPath;
+    this.commEnv = commEnv ?? null;
     this.lastWriteMs = 0;
 
     // Delete the comm file (and Dolphin's status next to it) once Dolphin is closed
@@ -363,11 +375,8 @@ export class PlaybackDolphinInstance extends DolphinInstance {
     this.watchStatus();
 
     if (!this.process) {
-      const params: string[] = [];
       // Launch this comms file
-      params.push("-i", this.commPath);
-
-      await this.start(params);
+      await this.start(this.commEnv ? [] : ["-i", this.commPath]);
     }
   }
 }

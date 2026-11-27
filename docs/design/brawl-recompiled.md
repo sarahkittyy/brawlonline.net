@@ -165,7 +165,7 @@ Still needed:
 1. **The online companion as part of the release, native** (§8.2): today it is Python (`tools/online` on `rollback-dolphin-crossplay`) plus our `mmclient`, which the launcher can't ship. Until then Play with EmissaryRecomp starts the game without online play.
 2. **Raw GameCube adapter input** (§4.4).
 3. The modes past Direct and Unranked (§8.5): rooms, 2v2, Ranked, being spectated.
-4. `.brep` recording of its games (same format), so replays, highlights, stats and Ranked reports work; playback stays on the playback Dolphin.
+4. `.brep` recording of its games (same format), so replays, highlights, stats and Ranked reports work; playback stays on the playback Dolphin (since 2026-11-27 replays and spectating play in the recomp when Play does: brawl-online-core.md §12.1).
 
 ## 8. Flows
 

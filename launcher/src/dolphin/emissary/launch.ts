@@ -179,6 +179,54 @@ export async function linkBrawlSave(nand: string, netplayNand: string): Promise<
   return true;
 }
 
+/** What the playback program's UserData links to in Play's (seedPlaybackUserData): HD texture packs. */
+const SHARED_FOLDERS = ["texture_replacements"];
+
+/** Takes away seedPlaybackUserData's links in `userData` (never what they point to). */
+export async function unlinkShared(userData: string): Promise<void> {
+  for (const name of SHARED_FOLDERS) {
+    const link = path.join(userData, name);
+    const st = await fs.promises.lstat(link).catch(() => null);
+    if (st?.isSymbolicLink()) {
+      await fs.promises.unlink(link);
+    }
+  }
+}
+
+/**
+ * The playback program's UserData (EmissaryRecomp.prepareForPlayback) before a start, from Play's:
+ * the player's settings (Config.toml, copied each time: a change made in a replay's window is not
+ * kept), the shader caches when Play's are newer (no pipelines compiled again), and Play's HD
+ * texture packs (a link). prepareEmissaryLaunch then does the rest, as for Play.
+ */
+export async function seedPlaybackUserData(playUserData: string, userData: string): Promise<void> {
+  await fs.promises.mkdir(userData, { recursive: true });
+  const config = await fs.promises.readFile(path.join(playUserData, "Config.toml"), "utf8").catch(() => null);
+  if (config !== null) {
+    await fs.promises.writeFile(path.join(userData, "Config.toml"), config);
+  }
+  const cache = path.join(playUserData, "Cache");
+  for (const name of await fs.promises.readdir(cache).catch(() => [] as string[])) {
+    const from = path.join(cache, name);
+    const to = path.join(userData, "Cache", name);
+    const [a, b] = await Promise.all([
+      fs.promises.stat(from).catch(() => null),
+      fs.promises.stat(to).catch(() => null),
+    ]);
+    if (a?.isFile() && (!b || a.mtimeMs > b.mtimeMs)) {
+      await fs.promises.mkdir(path.dirname(to), { recursive: true });
+      await fs.promises.copyFile(from, to).catch(() => undefined);
+    }
+  }
+  for (const name of SHARED_FOLDERS) {
+    const target = path.resolve(playUserData, name);
+    const link = path.join(userData, name);
+    if (!(await fs.promises.lstat(link).catch(() => null)) && (await fs.promises.stat(target).catch(() => null))) {
+      await fs.promises.symlink(target, link, "junction");
+    }
+  }
+}
+
 /** Prepares `input.userData` for a start; returns the environment the program needs. */
 export async function prepareEmissaryLaunch(
   input: EmissaryLaunchInput,

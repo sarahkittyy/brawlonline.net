@@ -22,7 +22,15 @@ import {
   systemTar,
   unpackArchive,
 } from "./emissary";
-import { configIniOverrides, emissaryConfig, linkBrawlSave, setTomlValue, unlinkBrawlSave } from "./launch";
+import {
+  configIniOverrides,
+  emissaryConfig,
+  linkBrawlSave,
+  seedPlaybackUserData,
+  setTomlValue,
+  unlinkBrawlSave,
+  unlinkShared,
+} from "./launch";
 import type { EmissaryJob, EmissaryManifest, EmissaryState } from "./types";
 import { EMISSARY_PROTOCOL } from "./types";
 
@@ -55,9 +63,11 @@ const releaseZip = (marker: string, online = true) =>
 
 // A release from EmissaryRecomp's CI: WiiCompiled.exe with Brawl Online's core, its DLLs, Sys/,
 // wii_bootstrap/ and a portable.txt + UserData of its own, in one top folder.
-const ciZip = (marker: string, { core = true } = {}) =>
+const ciZip = (marker: string, { core = true, playback = true } = {}) =>
   zipOf({
-    "EmissaryRecomp/WiiCompiled.exe": `exe ${marker} BRAWL_SD_VOLATILE_WRITES${core ? " BRAWL_ONLINE_CORE" : ""}`,
+    "EmissaryRecomp/WiiCompiled.exe": `exe ${marker} BRAWL_SD_VOLATILE_WRITES${core ? " BRAWL_ONLINE_CORE" : ""}${
+      core && playback ? " BRAWL_ONLINE_REPLAY_COMM" : ""
+    }`,
     "EmissaryRecomp/SDL3.dll": "sdl",
     "EmissaryRecomp/Sys/files.txt": "sys",
     "EmissaryRecomp/wii_bootstrap/shared2/x": "x",
@@ -534,6 +544,56 @@ describe("EmissaryRecomp", () => {
     expect(downloads).toBe(2);
   });
 
+  it("plays replays from a program of its own: hard links, its own portable root", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    const em = make();
+    await em.install();
+    const got = await em.prepareForPlayback();
+    const linked = path.join(em.root, "playback", "versions", "v0.7.0");
+    expect(got).toEqual({ exe: path.join(linked, "WiiCompiled.exe"), version: "v0.7.0" });
+    const play = path.join(em.root, "versions", "v0.7.0");
+    for (const file of ["WiiCompiled.exe", "SDL3.dll", path.join("Sys", "files.txt")]) {
+      expect((await fs.promises.stat(path.join(linked, file))).ino).toBe(
+        (await fs.promises.stat(path.join(play, file))).ino,
+      );
+    }
+    expect(fs.existsSync(path.join(em.root, "playback", "portable.txt"))).toBe(true);
+    expect(em.playbackUserData).toBe(path.join(em.root, "playback", "UserData"));
+    expect(fs.existsSync(em.playbackUserData)).toBe(true);
+    // Again: the same links (nothing linked twice), and another version's go.
+    await fs.promises.mkdir(path.join(em.root, "playback", "versions", "v0.6.9"), { recursive: true });
+    expect(await em.prepareForPlayback()).toEqual(got);
+    expect(await fs.promises.readdir(path.join(em.root, "playback", "versions"))).toEqual(["v0.7.0"]);
+    // Not removed while a replay plays in it.
+    em.setPlaybackRunning(true);
+    await expect(em.remove()).rejects.toThrow(/Close EmissaryRecomp/);
+    em.setPlaybackRunning(false);
+    await em.remove();
+    expect(fs.existsSync(em.root)).toBe(false);
+  });
+
+  it("leaves replays to Dolphin when it can't play them", async () => {
+    const em = make();
+    expect(await em.prepareForPlayback()).toEqual({ why: "it isn't installed" });
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0", { playback: false }) };
+    await em.install();
+    expect(await em.prepareForPlayback()).toEqual({ why: "v0.7.0 can't play replays" });
+    latest = { tag: "v0.7.1", zip: await ciZip("0.7.1", { core: false }) };
+    await em.install();
+    expect(await em.prepareForPlayback()).toEqual({ why: "v0.7.1 can't play online" });
+  });
+
+  it("reads whether a release plays replays when its record is from before", async () => {
+    latest = { tag: "v0.7.0", zip: await ciZip("0.7.0") };
+    const em = make();
+    await em.install();
+    const file = path.join(em.root, "current.json");
+    const record = JSON.parse(await fs.promises.readFile(file, "utf8"));
+    delete record.features.playback;
+    await fs.promises.writeFile(file, JSON.stringify(record));
+    expect(await em.prepareForPlayback()).toMatchObject({ version: "v0.7.0" });
+  });
+
   it("can't be removed while the game runs", async () => {
     const em = make();
     await em.install();
@@ -607,14 +667,17 @@ describe("release manifest and features", () => {
         path.join(dir, "WiiCompiled.exe"),
         Buffer.concat([big, Buffer.from("BRAWL_ONLINE_CORE..BRAWL_SD_VOLATILE_WRITES")]),
       );
-      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: true });
+      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: true, playback: false });
       await fs.promises.writeFile(path.join(dir, "WiiCompiled.exe"), "BRAWL_ONLINE_IPC BRAWL_SD_VOLATILE_WRITES");
-      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: false });
+      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: false, playback: false });
+      // The switch may be in a DLL (CI's engine_usa.dll has the core).
+      await fs.promises.writeFile(path.join(dir, "engine_usa.dll"), "BRAWL_ONLINE_CORE BRAWL_ONLINE_REPLAY_COMM");
+      expect(await releaseFeatures(dir)).toEqual({ readOnlyCard: true, core: true, playback: true });
       // macOS: Emissary.app/Contents/MacOS/Emissary.
       const macos = path.join(dir, "MacOS");
       await fs.promises.mkdir(macos);
       await fs.promises.writeFile(path.join(macos, "Emissary"), "BRAWL_ONLINE_CORE BRAWL_SD_VOLATILE_WRITES");
-      expect(await releaseFeatures(macos)).toEqual({ readOnlyCard: true, core: true });
+      expect(await releaseFeatures(macos)).toEqual({ readOnlyCard: true, core: true, playback: false });
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true });
     }
@@ -713,6 +776,45 @@ describe("a Linux release", () => {
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the playback program's UserData", () => {
+  let tmp: string;
+  beforeEach(async () => {
+    tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "emissary-pb-"));
+  });
+  afterEach(async () => {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("starts from Play's settings, shader caches and texture packs", async () => {
+    const play = path.join(tmp, "UserData");
+    const pb = path.join(tmp, "playback", "UserData");
+    await fs.promises.mkdir(path.join(play, "Cache"), { recursive: true });
+    await fs.promises.mkdir(path.join(play, "texture_replacements", "Load"), { recursive: true });
+    await fs.promises.writeFile(path.join(play, "Config.toml"), "[video]\nscale = 4.5\n");
+    await fs.promises.writeFile(path.join(play, "Cache", "pipeline_cache.bin"), "play's");
+    await seedPlaybackUserData(play, pb);
+    expect(await fs.promises.readFile(path.join(pb, "Config.toml"), "utf8")).toBe("[video]\nscale = 4.5\n");
+    expect(await fs.promises.readFile(path.join(pb, "Cache", "pipeline_cache.bin"), "utf8")).toBe("play's");
+    expect((await fs.promises.lstat(path.join(pb, "texture_replacements"))).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(pb, "texture_replacements", "Load"))).toBe(true);
+
+    // Its own newer cache stays; Play's settings are taken again.
+    const own = path.join(pb, "Cache", "pipeline_cache.bin");
+    await fs.promises.writeFile(own, "playback's, newer");
+    const later = new Date(Date.now() + 60_000);
+    await fs.promises.utimes(own, later, later);
+    await fs.promises.writeFile(path.join(play, "Config.toml"), "[video]\nscale = 2\n");
+    await seedPlaybackUserData(play, pb);
+    expect(await fs.promises.readFile(own, "utf8")).toBe("playback's, newer");
+    expect(await fs.promises.readFile(path.join(pb, "Config.toml"), "utf8")).toBe("[video]\nscale = 2\n");
+
+    // The link goes, never Play's texture packs.
+    await unlinkShared(pb);
+    expect(fs.existsSync(path.join(pb, "texture_replacements"))).toBe(false);
+    expect(fs.existsSync(path.join(play, "texture_replacements", "Load"))).toBe(true);
   });
 });
 

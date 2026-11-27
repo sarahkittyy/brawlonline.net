@@ -29,7 +29,7 @@ import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { dolphinToolNextTo } from "./dolphin_tool";
 import { closeEmissary, emissaryIdle } from "./emissary/close";
 import type { EmissaryRecomp } from "./emissary/emissary";
-import { configIniOverrides, prepareEmissaryLaunch } from "./emissary/launch";
+import { configIniOverrides, prepareEmissaryLaunch, seedPlaybackUserData } from "./emissary/launch";
 import type { EmissaryFallback, EmissaryJob } from "./emissary/types";
 import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave, listBrawlSaveFiles } from "./install/brawl_save";
@@ -152,6 +152,12 @@ export class DolphinManager {
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
   /** The Project+ release each playback Dolphin's card is on (null: the launcher's own). */
   private playbackReleases = new Map<string, string | null>();
+  /**
+   * What each playback instance was started to play with: EmissaryRecomp when Play plays with it
+   * (replays, highlights, spectating; never a render or Configure), else the playback Dolphin. An
+   * instance that fell back to Dolphin still says EmissaryRecomp, so it isn't started again for each request.
+   */
+  private playbackEngines = new Map<string, "dolphin" | "emissary">();
   /** A render Dolphin's music and video height (set on its command line). */
   private renderSettings = new Map<string, string>();
   /** The seek bar's launcher side (`<comm>.overlay.json`): the renderer's (use_playback_overlay.ts), for every playback Dolphin. */
@@ -727,7 +733,21 @@ export class DolphinManager {
     if (configuring) {
       throw new Error("Cannot open dolphin if a configuring dolphin is open.");
     }
+    // "Play Project+ with: EmissaryRecomp": replays, highlights and spectated games in it too (Sarah's
+    // board: "trying to spectate a game in the spectate tab opens dolphin even though i have emissary
+    // set"). A render (the recomp can't make videos) and Configure stay Dolphin's.
+    const engine =
+      !render && id !== "configure" && this.settingsManager.get().settings.playProjectPlusWith === "emissary"
+        ? "emissary"
+        : "dolphin";
     let playbackInstance = this.playbackDolphinInstances.get(id);
+    if (playbackInstance && (this.playbackEngines.get(id) ?? "dolphin") !== engine) {
+      // Settings > Game changed while it was open: the next request opens the other one.
+      log.info(`Restarting the playback in ${engine === "emissary" ? "EmissaryRecomp" : "Dolphin"}`);
+      playbackInstance.replaced = true;
+      await this._stopPlayback(id, playbackInstance);
+      playbackInstance = undefined;
+    }
     if (playbackInstance && (this.playbackReleases.get(id) ?? null) !== release) {
       // Its card is another Project+ release's: the game's files are read at boot, so it starts again.
       log.info(`Restarting the playback Dolphin for Project+ ${release ?? this.pplusVersions().currentRelease}`);
@@ -797,10 +817,31 @@ export class DolphinManager {
       }
       // The playback NAND must have a Brawl save, or P+ asks to create one before every first replay
       await this._checkBrawlSave(playbackInstallation, storeDir);
-      log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
-      playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
+      const recomp =
+        engine === "emissary" && sdCardImage
+          ? await this._emissaryPlayback(sdCardImage, playbackInstallation, dolphinPath)
+          : null;
+      if (recomp) {
+        log.info(
+          `Launching EmissaryRecomp ${recomp.version} for playback at path: ${recomp.exe} ` +
+            `(BRAWL_ONLINE_CORE=${recomp.env.BRAWL_ONLINE_CORE})`,
+        );
+        playbackInstance = new PlaybackDolphinInstance(recomp.exe, [], {
+          env: recomp.env,
+          cwd: path.dirname(recomp.exe),
+          ignoreOutput: true,
+          commEnv: "BRAWL_ONLINE_REPLAY_COMM",
+        });
+      } else {
+        log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
+        playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
+      }
+      this.playbackEngines.set(id, engine);
       const created = playbackInstance;
+      const emissary = recomp ? this.emissary?.() : undefined;
+      emissary?.setPlaybackRunning(true);
       playbackInstance.on("close", async (exitCode) => {
+        emissary?.setPlaybackRunning(false);
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
           instanceId: id,
@@ -809,10 +850,13 @@ export class DolphinManager {
           replaced: created.replaced || undefined,
         });
 
-        // Remove the instance from the map on close
-        this.playbackDolphinInstances.delete(id);
-        this.playbackReleases.delete(id);
-        this.renderSettings.delete(id);
+        // Remove the instance from the map on close (not a newer one started for the same id meanwhile)
+        if (this.playbackDolphinInstances.get(id) === created) {
+          this.playbackDolphinInstances.delete(id);
+          this.playbackReleases.delete(id);
+          this.renderSettings.delete(id);
+          this.playbackEngines.delete(id);
+        }
       });
       playbackInstance.on("error", (err: Error) => {
         log.error(err);
@@ -1043,6 +1087,70 @@ export class DolphinManager {
   }
 
   /**
+   * The `-C` settings a Dolphin start gets, written into `userFolder`'s Config/*.ini for the core in
+   * EmissaryRecomp (it reads only those files): the logging every start gets, and `dolphinOverrides`.
+   */
+  private async _writeCoreConfig(userFolder: string, dolphinOverrides: readonly string[]) {
+    const overrides = configIniOverrides([...LOGGING_CONFIG_ARGS, ...dolphinOverrides]);
+    for (const file of new Set(overrides.map((o) => o.file))) {
+      await IniFile.modify(path.join(userFolder, "Config", file), async (ini) => {
+        for (const o of overrides.filter((x) => x.file === file)) {
+          ini.getOrCreateSection(o.section).set(o.key, o.value);
+        }
+        await ini.save();
+      });
+    }
+    return overrides;
+  }
+
+  /**
+   * EmissaryRecomp for a replay, highlights or a spectated game (when Play plays with it): its
+   * playback program (EmissaryRecomp.prepareForPlayback), set up as Play's is (prepareEmissaryLaunch)
+   * but in its own UserData, with the playback Dolphin's User folder as the core's
+   * (BRAWL_ONLINE_CORE: its settings, Brawl save, the spectated games' folder and the logs) and
+   * `sdCardImage`, the card that Dolphin would boot. The caller adds the comm file
+   * (BRAWL_ONLINE_REPLAY_COMM). Null when it can't play: the playback Dolphin plays (and the log says why).
+   */
+  private async _emissaryPlayback(
+    sdCardImage: string,
+    installation: LocalDolphinInstallation,
+    dolphinExe: string,
+  ): Promise<{ exe: string; version: string; env: Record<string, string> } | null> {
+    const emissary = this.emissary?.();
+    if (!emissary) {
+      log.warn("Playing back in Dolphin, not EmissaryRecomp: it isn't set up");
+      return null;
+    }
+    try {
+      const prepared = await emissary.prepareForPlayback();
+      if ("why" in prepared) {
+        log.warn(`Playing back in Dolphin, not EmissaryRecomp: ${prepared.why}`);
+        return null;
+      }
+      const testMode = readTestMode(process.env, app.isPackaged);
+      await this._writeCoreConfig(installation.userFolder, testMode.active ? testMode.dolphinExtraArgs : []);
+      await seedPlaybackUserData(emissary.userData, emissary.playbackUserData);
+      const env = await prepareEmissaryLaunch(
+        {
+          userData: emissary.playbackUserData,
+          gameFolder: emissary.gameFolder,
+          sdCardImage,
+          netplaySave: netplaySaveStore(projectPlusStoreFolder(this.netplayFolder())),
+          netplayNand: await installation.nandRoot(),
+          onlineUserFolder: installation.userFolder,
+        },
+        (message) => log.info(`(playback) ${message}`),
+      );
+      // Dolphin's Controllers window over the game (its Controls menu), on the same User folder.
+      env.BRAWL_ONLINE_DOLPHIN = dolphinExe;
+      return { exe: prepared.exe, version: prepared.version, env };
+    } catch (err) {
+      log.error(`Playing back in Dolphin, not EmissaryRecomp: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
+  }
+
+  /**
    * Starts EmissaryRecomp as the netplay game (docs/design/brawl-recompiled.md §8): it is the
    * netplay instance while it runs, so Play and the room hand-off (`User/Online`) treat it as they
    * treat Dolphin; Brawl Online's core in it reads the netplay User folder (BRAWL_ONLINE_CORE).
@@ -1067,15 +1175,7 @@ export class DolphinManager {
       return prepared;
     }
     const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
-    const overrides = configIniOverrides([...LOGGING_CONFIG_ARGS, ...dolphinOverrides]);
-    for (const file of new Set(overrides.map((o) => o.file))) {
-      await IniFile.modify(path.join(installation.userFolder, "Config", file), async (ini) => {
-        for (const o of overrides.filter((x) => x.file === file)) {
-          ini.getOrCreateSection(o.section).set(o.key, o.value);
-        }
-        await ini.save();
-      });
-    }
+    const overrides = await this._writeCoreConfig(installation.userFolder, dolphinOverrides);
     if (dolphinOverrides.length) {
       log.info(
         `EmissaryRecomp (test mode): Config gets ${overrides.map((o) => `${o.file} ${o.section}.${o.key}`).join(", ")}`,
@@ -1993,6 +2093,7 @@ export class DolphinManager {
     this.playbackDolphinInstances.delete(id);
     this.playbackReleases.delete(id);
     this.renderSettings.delete(id);
+    this.playbackEngines.delete(id);
   }
 
   /** The playback card of another Project+ release, with the plugin on it (made or checked). */

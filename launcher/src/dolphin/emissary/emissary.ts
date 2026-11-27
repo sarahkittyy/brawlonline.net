@@ -33,7 +33,7 @@ import { moveTree } from "utils/move_tree";
 import { removeTree } from "utils/remove_tree";
 
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
-import { unlinkBrawlSave } from "./launch";
+import { unlinkBrawlSave, unlinkShared } from "./launch";
 import type {
   EmissaryFallback,
   EmissaryJob,
@@ -45,6 +45,14 @@ import type {
 import { EMISSARY_PROTOCOL, EMISSARY_REPO } from "./types";
 
 export const EMISSARY_FOLDER = "emissary-recomp";
+/**
+ * `<emissary-recomp>/playback/`: the program that plays replays and spectated games, beside the one
+ * Play runs (prepareForPlayback). Its own portable.txt and UserData (the runtime finds portable.txt
+ * above its program), so it never touches the NAND, card or settings of a game that is open.
+ */
+export const EMISSARY_PLAYBACK_FOLDER = "playback";
+/** In a playback version folder once every file of the release is linked in. */
+const MIRROR_DONE = ".brawl-online-linked";
 export const EMISSARY_API = `https://api.github.com/repos/${EMISSARY_REPO}/releases`;
 const DOWNLOAD_PREFIX = `https://github.com/${EMISSARY_REPO}/releases/download/`;
 
@@ -272,11 +280,20 @@ type Current = {
  * EmissaryRecomp v0.6.0 has neither. (Records from before the core say `online`, for kalomaze's
  * companion, which is gone: they count as without it.)
  */
-export type EmissaryFeatures = { readOnlyCard: boolean; core: boolean };
+export type EmissaryFeatures = {
+  readOnlyCard: boolean;
+  core: boolean;
+  /**
+   * It plays a replay or a spectated game itself (BRAWL_ONLINE_REPLAY_COMM: the playback Dolphin's
+   * `-i <comm file>`, docs/design/brawl-online-core.md §12). Absent in records from before it was read.
+   */
+  playback?: boolean;
+};
 
 const FEATURE_MARKERS: Record<keyof EmissaryFeatures, string> = {
   readOnlyCard: "BRAWL_SD_VOLATILE_WRITES",
   core: "BRAWL_ONLINE_CORE",
+  playback: "BRAWL_ONLINE_REPLAY_COMM",
 };
 
 /** Whether `file` holds each of `markers` (read in chunks: the program is about 240 MB). */
@@ -304,13 +321,13 @@ async function fileHolds(file: string, markers: string[]): Promise<boolean[]> {
 
 /** Scans the program's files (CI's WiiCompiled, v0.6.0's engine DLLs or Linux program) for the feature switches' names. */
 export async function releaseFeatures(programDir: string): Promise<EmissaryFeatures> {
-  const found: EmissaryFeatures = { readOnlyCard: false, core: false };
+  const found: Required<EmissaryFeatures> = { readOnlyCard: false, core: false, playback: false };
   const names = await fs.promises.readdir(programDir).catch(() => [] as string[]);
   const targets = names.filter((n) =>
     // Emissary: the macOS program, in Emissary.app/Contents/MacOS.
     /^(WiiCompiled(\.exe)?|Emissary|engine_usa.*\.dll|brawl-engine(\.exe)?|libengine.*\.so)$/i.test(n),
   );
-  const keys = Object.keys(FEATURE_MARKERS) as (keyof EmissaryFeatures)[];
+  const keys = Object.keys(FEATURE_MARKERS) as (keyof Required<EmissaryFeatures>)[];
   for (const name of targets) {
     const holds = await fileHolds(
       path.join(programDir, name),
@@ -389,6 +406,10 @@ export class EmissaryRecomp {
   private installing: Promise<EmissaryState> | null = null;
   /** Play's progress (prepareForPlay), while it waits for a download. */
   private onJob: ((job: EmissaryJob) => void) | null = null;
+  /** A replay or spectated game plays in the playback program (prepareForPlayback). */
+  private playbackRunning = false;
+  /** Whether a version plays replays, for records from before current.json said (prepareForPlayback). */
+  private readonly playbackFeature = new Map<string, boolean>();
 
   constructor(private readonly opts: EmissaryOptions) {
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
@@ -690,6 +711,80 @@ export class EmissaryRecomp {
     }
   }
 
+  /** The playback program's portable root (EMISSARY_PLAYBACK_FOLDER). */
+  get playbackRoot(): string {
+    return path.join(this.opts.root, EMISSARY_PLAYBACK_FOLDER);
+  }
+
+  /** The playback program's settings, saves and logs. */
+  get playbackUserData(): string {
+    return path.join(this.playbackRoot, "UserData");
+  }
+
+  /** A replay or spectated game plays in it: not removed meanwhile (setPlaybackRunning). */
+  setPlaybackRunning(running: boolean) {
+    this.playbackRunning = running;
+  }
+
+  /**
+   * The program for a replay, highlights or a spectated game when Play plays with EmissaryRecomp
+   * (manager._launchPlaybackDolphin), or why the playback Dolphin plays instead. The installed
+   * version, never a download first (a replay doesn't wait for one; Play updates it), and also while
+   * Play's game is open: it runs from `playback/` (hard links of that version's files, with a
+   * portable root of its own), so two of them never share a UserData.
+   */
+  async prepareForPlayback(): Promise<{ exe: string; version: string } | { why: string }> {
+    if (!this.supported) {
+      return { why: "it isn't made for this computer" };
+    }
+    if (this.job?.phase === "gameFiles") {
+      return { why: "its game files are being prepared" };
+    }
+    const current = await this.readJson<Current>("current.json");
+    const exe = await this.engine();
+    if (!current || !exe) {
+      return { why: "it isn't installed" };
+    }
+    if (!(await this.gameFilesCurrent(await this.readJson<GameFiles>("game.json")))) {
+      return { why: "its game files aren't the Settings disc's" };
+    }
+    if (!playsOnline(current)) {
+      return { why: `${current.version} can't play online` };
+    }
+    const programDir = path.dirname(exe);
+    let playback = current.features?.playback ?? this.playbackFeature.get(current.version);
+    if (playback === undefined) {
+      // Records from before the switch was read: read now, once.
+      playback = (await releaseFeatures(programDir)).playback === true;
+      this.playbackFeature.set(current.version, playback);
+    }
+    if (!playback) {
+      return { why: `${current.version} can't play replays` };
+    }
+    const versionDir = this.versionDir(current.version);
+    const program = path.relative(versionDir, exe);
+    const linked = path.join(this.playbackRoot, "versions", current.version);
+    await fs.promises.mkdir(this.playbackUserData, { recursive: true });
+    await fs.promises.writeFile(path.join(this.playbackRoot, "portable.txt"), PORTABLE_TEXT);
+    // (The same version installed again is new files: linked again.)
+    const done = `${current.version} ${current.installedAt}`;
+    const marker = await fs.promises.readFile(path.join(linked, MIRROR_DONE), "utf8").catch(() => null);
+    if (marker !== done) {
+      await removeTree(linked);
+      await linkTree(versionDir, linked);
+      await fs.promises.writeFile(path.join(linked, MIRROR_DONE), done);
+      this.log(`EmissaryRecomp ${current.version}: linked into ${linked} for replays and spectating`);
+    }
+    // Other versions' links (one may still run: then it goes next time).
+    const versions = path.join(this.playbackRoot, "versions");
+    for (const name of await fs.promises.readdir(versions).catch(() => [] as string[])) {
+      if (name !== current.version) {
+        await removeTree(path.join(versions, name)).catch(() => undefined);
+      }
+    }
+    return { exe: path.join(linked, program), version: current.version };
+  }
+
   /** Stops the job that runs. */
   cancel() {
     this.abort?.abort();
@@ -853,7 +948,7 @@ export class EmissaryRecomp {
     };
     this.log(
       `EmissaryRecomp ${release.version}: ${program}, read-only card ${record.features?.readOnlyCard}, ` +
-        `Brawl Online core ${record.features?.core}` +
+        `Brawl Online core ${record.features?.core}, playback ${record.features?.playback}` +
         (release.manifest
           ? `, built from Brawl Online ${release.manifest.brawlOnline}, protocol ${release.manifest.protocol}`
           : ", no manifest"),
@@ -1011,7 +1106,7 @@ export class EmissaryRecomp {
 
   /** Deletes the program, the disc's files, its settings and saves. */
   async remove(): Promise<void> {
-    if (this.running) {
+    if (this.running || this.playbackRunning) {
       throw new EmissaryError("Close EmissaryRecomp first.");
     }
     if (this.job) {
@@ -1020,6 +1115,8 @@ export class EmissaryRecomp {
     await this.lock.runExclusive(async () => {
       // Its Brawl save is a link to the netplay Dolphin's (launch.ts): the link goes, the save stays
       await unlinkBrawlSave(path.join(this.userData, "NAND"));
+      await unlinkBrawlSave(path.join(this.playbackUserData, "NAND"));
+      await unlinkShared(this.playbackUserData);
       await removeTree(this.opts.root);
     });
     this.lastError = null;
@@ -1038,6 +1135,26 @@ function heldError(err: unknown, what: string): unknown {
     `Another program (often an antivirus scan) kept ${what} open, so they could not be moved into ` +
       `place. Try again in a minute. (${(err as Error).message})`,
   );
+}
+
+/**
+ * `dest` as `src`: its folders made, its files hard links of src's (one copy on disk, and no copy
+ * of 500 MB at each start), symbolic links (a macOS bundle's) as they are. A file that can't be
+ * linked (a file system without hard links) is copied.
+ */
+export async function linkTree(src: string, dest: string): Promise<void> {
+  await fs.promises.mkdir(dest, { recursive: true });
+  for (const entry of await fs.promises.readdir(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await linkTree(from, to);
+    } else if (entry.isSymbolicLink()) {
+      await fs.promises.symlink(await fs.promises.readlink(from), to);
+    } else {
+      await fs.promises.link(from, to).catch(() => fs.promises.copyFile(from, to));
+    }
+  }
 }
 
 async function exists(p: string): Promise<boolean> {
