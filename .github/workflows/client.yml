@@ -575,11 +575,13 @@ jobs:
         run: |
           $files = @(Get-ChildItem "$env:RUNNER_TEMP\out-win\*.exe") +
             @(Get-ChildItem "launcher\release\build\win-unpacked" -Recurse -File -Filter *.exe)
+          # As electron-updater checks an update: valid, and the subject's CN exactly the publisher name.
           $bad = 0
           foreach ($f in $files) {
-            $s = Get-AuthenticodeSignature $f.FullName
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            $cn = ([regex]'(?:^|,\s*)CN=("[^"]*"|[^,]*)').Match("$($s.SignerCertificate.Subject)").Groups[1].Value.Trim('"')
             Write-Host "$($s.Status) $($f.Name) $($s.SignerCertificate.Subject)"
-            if ($s.Status -ne "Valid" -or $s.SignerCertificate.Subject -notlike "*CN=$env:WIN_SIGN_PUBLISHER*") { $bad++ }
+            if ($s.Status -ne "Valid" -or $cn -cne $env:WIN_SIGN_PUBLISHER) { $bad++ }
           }
           if ($bad) { Write-Host "::error::$bad exe(s) not signed by $env:WIN_SIGN_PUBLISHER"; exit 1 }
       - uses: actions/upload-artifact@v7
