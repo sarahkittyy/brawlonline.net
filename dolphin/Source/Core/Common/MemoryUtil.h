@@ -10,6 +10,16 @@ namespace Common
 {
 void* AllocateExecutableMemory(size_t size);
 
+#if defined(_WIN32) && defined(_M_X86_64)
+// The code a JIT writes has no unwind data of its own, so on Windows an exception that reaches it
+// unhandled (a C++ throw from a function JIT code called, a fault in it) used to end the process
+// without the unhandled exception filter: the exception's dispatch can't get past it (bug report
+// #373). Executable memory now has a handler of its own there, and it calls `handler` (with the
+// exception's EXCEPTION_POINTERS) before the dispatch goes on, and fails as before.
+using ExecutableMemoryExceptionHandler = void (*)(void* exception_pointers);
+void SetExecutableMemoryExceptionHandler(ExecutableMemoryExceptionHandler handler);
+#endif
+
 // These two functions control the executable/writable state of the W^X memory
 // allocations. More detailed documentation about them is in the .cpp file.
 // In general where applicable the ScopedJITPageWriteAndNoExecute wrapper

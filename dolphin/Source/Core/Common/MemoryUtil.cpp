@@ -3,9 +3,13 @@
 
 #include "Common/MemoryUtil.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+
+#include <fmt/format.h>
 
 #include "Common/CommonFuncs.h"
 #include "Common/Logging/Log.h"
@@ -32,12 +36,100 @@
 
 namespace Common
 {
+#if defined(_WIN32) && defined(_M_X86_64)
+namespace
+{
+// After each executable block (past the size its caller asked for): a function table of one entry
+// covering the block, its unwind info (no unwind codes, an exception handler) and a jump to that
+// handler, which an unwind info names by its offset from the block.
+struct UnwindTail
+{
+  RUNTIME_FUNCTION function;
+  // UNWIND_INFO: version 1, UNW_FLAG_EHANDLER; no prolog, no unwind codes, no frame register.
+  u8 unwind_info[4];
+  u32 handler_offset;
+  u32 padding;
+  // jmp [rip + 0], then the handler's address.
+  u8 thunk[6];
+  u8 handler_address[8];
+};
+
+std::atomic<ExecutableMemoryExceptionHandler> s_exception_handler{nullptr};
+
+size_t UnwindTailOffset(size_t size)
+{
+  return (size + 15) & ~size_t{15};
+}
+
+EXCEPTION_DISPOSITION ExecutableMemoryFrameHandler(EXCEPTION_RECORD* record, ULONG64,
+                                                   CONTEXT* context, DISPATCHER_CONTEXT*)
+{
+  // Only while looking for a handler (not unwinding: nothing past here gets that far).
+  if (!(record->ExceptionFlags & EXCEPTION_UNWIND))
+  {
+    if (const ExecutableMemoryExceptionHandler handler = s_exception_handler.load())
+    {
+      EXCEPTION_POINTERS pointers{record, context};
+      handler(&pointers);
+    }
+  }
+  return ExceptionContinueSearch;
+}
+
+// Gives the block the unwind tail. With no unwind codes, an unwind from the block's code goes on
+// as it did with no function table (the return address at the stack pointer).
+void AddUnwindTail(u8* block, size_t size)
+{
+  auto* tail = reinterpret_cast<UnwindTail*>(block + UnwindTailOffset(size));
+  const auto offset = [block](const void* at) {
+    return static_cast<DWORD>(static_cast<const u8*>(at) - block);
+  };
+  tail->unwind_info[0] = 1 | (UNW_FLAG_EHANDLER << 3);
+  tail->handler_offset = offset(tail->thunk);
+  tail->thunk[0] = 0xFF;
+  tail->thunk[1] = 0x25;
+  std::memset(tail->thunk + 2, 0, 4);
+  const auto handler = reinterpret_cast<uintptr_t>(&ExecutableMemoryFrameHandler);
+  std::memcpy(tail->handler_address, &handler, sizeof(handler));
+  tail->function.BeginAddress = 0;
+  tail->function.EndAddress = static_cast<DWORD>(size);
+  tail->function.UnwindData = offset(tail->unwind_info);
+  if (!RtlAddFunctionTable(&tail->function, 1, reinterpret_cast<DWORD64>(block)))
+    WARN_LOG_FMT(COMMON, "Could not add the function table of executable memory at {}",
+                 fmt::ptr(block));
+}
+
+// Removes the block's function table, if it has one (memory that is not executable has none).
+void RemoveUnwindTail(void* block, size_t size)
+{
+  auto* tail = reinterpret_cast<UnwindTail*>(static_cast<u8*>(block) + UnwindTailOffset(size));
+  DWORD64 base = 0;
+  if (RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(block), &base, nullptr) ==
+          &tail->function &&
+      base == reinterpret_cast<DWORD64>(block))
+  {
+    RtlDeleteFunctionTable(&tail->function);
+  }
+}
+}  // namespace
+
+void SetExecutableMemoryExceptionHandler(ExecutableMemoryExceptionHandler handler)
+{
+  s_exception_handler.store(handler);
+}
+#endif
+
 // This is purposely not a full wrapper for virtualalloc/mmap, but it
 // provides exactly the primitive operations that Dolphin needs.
 
 void* AllocateExecutableMemory(size_t size)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(_M_X86_64)
+  void* ptr = VirtualAlloc(nullptr, UnwindTailOffset(size) + sizeof(UnwindTail), MEM_COMMIT,
+                           PAGE_EXECUTE_READWRITE);
+  if (ptr)
+    AddUnwindTail(static_cast<u8*>(ptr), size);
+#elif defined(_WIN32)
   void* ptr = VirtualAlloc(nullptr, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
   int map_flags = MAP_ANON | MAP_PRIVATE;
@@ -160,6 +252,9 @@ bool FreeMemoryPages(void* ptr, size_t size)
   if (ptr)
   {
 #ifdef _WIN32
+#ifdef _M_X86_64
+    RemoveUnwindTail(ptr, size);
+#endif
     if (!VirtualFree(ptr, 0, MEM_RELEASE))
     {
       PanicAlertFmt("FreeMemoryPages failed!\nVirtualFree: {}", GetLastErrorString());

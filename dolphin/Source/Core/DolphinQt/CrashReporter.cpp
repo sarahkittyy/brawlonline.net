@@ -25,6 +25,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/Logging/LogManager.h"
+#include "Common/MemoryUtil.h"
 #include "Common/StringUtil.h"
 
 #include "DolphinQt/HangWatchdog.h"
@@ -261,12 +262,12 @@ const char* ExceptionName(DWORD code)
   }
 }
 
-LONG WINAPI OnUnhandled(EXCEPTION_POINTERS* info)
+void ReportException(EXCEPTION_POINTERS* info, const char* note)
 {
   const EXCEPTION_RECORD& rec = *info->ExceptionRecord;
   char where[300];
   ModuleOffset(rec.ExceptionAddress, where, sizeof(where));
-  char what[512];
+  char what[640];
   std::snprintf(what, sizeof(what), "%s (0x%08lx) at %s", ExceptionName(rec.ExceptionCode),
                 rec.ExceptionCode, where);
   if (rec.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec.NumberParameters >= 2)
@@ -279,8 +280,28 @@ LONG WINAPI OnUnhandled(EXCEPTION_POINTERS* info)
                   static_cast<unsigned long long>(rec.ExceptionInformation[1]));
     Append(what, sizeof(what), access);
   }
+  Append(what, sizeof(what), note);
   Report(what, info);
+}
+
+LONG WINAPI OnUnhandled(EXCEPTION_POINTERS* info)
+{
+  ReportException(info, "");
   return s_previous_filter ? s_previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+// An exception no handler took before it reached code the JIT wrote: nothing gets past that code
+// (it has no unwind data), so the process ends with the exception's code and the unhandled
+// exception filter never runs (bug report #373: every start of one player's Brawl Mods build ended
+// with e06d7363 and nothing in the log). Informational codes (a debugger's output, a thread name)
+// are left alone.
+void OnReachedJitCode(void* pointers)
+{
+  auto* info = static_cast<EXCEPTION_POINTERS*>(pointers);
+  if (!(info->ExceptionRecord->ExceptionCode & 0x80000000))
+    return;
+  ReportException(info, ", and no handler took it before it reached code the JIT wrote (no "
+                        "handler past that code can)");
 }
 
 void OnAbort(int sig)
@@ -351,6 +372,9 @@ void Install()
   if (previous_abort != SIG_ERR)
     s_previous_abort = previous_abort;
   _set_invalid_parameter_handler(OnInvalidParameter);
+#ifdef _M_X86_64
+  Common::SetExecutableMemoryExceptionHandler(OnReachedJitCode);
+#endif
 }
 }  // namespace CrashReporter
 

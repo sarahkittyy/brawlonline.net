@@ -11,6 +11,9 @@
 // crashed run's dolphin.log, and a bug report sends the Logs folder. Before this a crash ended the
 // process with c0000409 or e06d7363 and the log stopped where its last write had got to, seconds
 // before (bug report #324: four crashes in REX rooms, nothing in the logs about any of them).
+// An exception that reaches the JIT's code unhandled (a throw from a function it called, on the CPU
+// thread) is reported there, from the handler executable memory has (Common/MemoryUtil.h): the
+// unhandled exception filter never sees those (bug report #373).
 // Elsewhere nothing (Linux has its own signal handler in Main.cpp).
 namespace CrashReporter
 {
