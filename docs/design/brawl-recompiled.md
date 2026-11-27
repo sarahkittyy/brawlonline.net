@@ -515,3 +515,47 @@ Recomp `brawlonline/fence-release` 2673c81, merged into `brawlonline/windows-bui
 **Not checked:** Direct3D 12 with the fix under the same load, AMD and Intel GPUs, Linux and macOS.
 
 **Still to look at:** a rollback re-runs every frame on the GPU in full, though only the last one's image is ever shown (the hidden advances in runtime/src/brawl_rollback.cpp). Not drawing the earlier ones would cut the GPU's work in a deep rollback from depth + 1 frames to 2.
+
+## 23. Frame pacing online (2026-11-27)
+
+Recomp `brawlonline/pacing` dc71a16, merged into `brawlonline/windows-build` 4f078da (local, not pushed, not released); the recomp's
+own write-up with the measurements is its `docs/frame-pacing.md`.
+
+**Sarah's card:** "when i play online i can max out at like 180 fps ish out of 240 ... it feels laggy, inconsistent ...
+dolphin is just so much more usable". Her last online match (v0.7.4, RTX 4070, 240 Hz fixed refresh, Predict 240, ping
+~110 ms, delay 1) rolled back on 61% of frames with no late frames: the game kept up, the picture didn't.
+
+**Causes and fixes** (presentation only; no simulation or network change):
+- Every frame right after a rollback was shown without inserted frames (Predict's "discontinuous" hold): at a rollback
+  every other frame the picture switched between 240 and 60 Hz several times a second. The rollback's re-run frames
+  already retire their transforms in Aurora, the last one drawn in full, so Predict now carries the frame after a
+  rollback on from the re-run's last frame (`AURORA_PREDICT_ROLLBACK_HOLD=1`: the old way).
+- Each frame showed the moment it was ready, so a frame that ran a re-run first came ~3.5-7.5 ms later than one that
+  didn't, and its inserted frames moved with it. Ported Dolphin's present hold (PresentStats::PresentHoldUntil: due
+  time + 95th percentile of the last 120 frames' lateness without stalls, at most 8 ms; vi.cpp passes the due time from
+  `DetClock::TakeFrameDue`). Off on macOS for now (presents there run on the game thread). `AURORA_PRESENT_HOLD=0`.
+- No inserted-frame backstop online (the slot controller only ran retrace-paced, which Brawl Online never is), and it
+  stepped 240 -> 180 on a 240 Hz fixed screen, which shows pictures for 1, 1 and 2 refreshes. New: a controller fed
+  by the presenter (late or dropped inserted frames, a late frame after waiting for the encode), a quarter of a second's
+  frames to step down, never below 120 at 240; and on fixed-refresh screens at a multiple of 60 Hz only even steps
+  (240 -> 120 -> 60).
+- The presenter spaced inserted frames a refresh +3% apart; at 240 on 240 Hz each came later than the last, the third
+  ~3.8 ms before the next frame's image. Now exactly a refresh.
+- New per-match log line `recomp display:` in dolphin.log (beside `recomp pacing:`): presents, frames shown alone,
+  frame-to-frame spacing, holds, late/dropped inserted frames, a modelled screen's shown pictures and uneven share.
+
+**Measured** (two recomps in Direct matches on this PC, 92 ms round trip + Aggressive delay, both players moving; each
+match an A/B, old side vs new side): frames shown without inserted frames ~470 -> ~60 a minute, frames over 2 ms off
+the 60 Hz beat ~870 -> ~200, uneven motion on a modelled 240 Hz screen ~10.5% -> ~2.5%, the same at 2.25x MSAA 4x. On
+the real screen (PresentMon, primary 240 Hz monitor, two pairs): pictures shown 199-205/s -> 222-226/s, uneven
+9.9-10.9% -> 2.9-3.4%, screen time in pictures held over 6 ms 25-30% -> 11-13%. The cost is the hold: the frame's
+image ~4 ms later on average online with rollbacks (~1 ms without), because ~15% of frames come late and the others
+wait for that spread; a lower percentile gave the jitter back (80th: 0.8 ms, but most of the gain lost).
+
+**Not seen yet: a GPU that can't keep up** (two recomps at 2.25x MSAA 4x on one RTX 4070: ~180 pictures a second
+shown for both arms, presents on time, the GPU late). The controller would need the GPU's completion times.
+
+**Next, not done:** the shared core's Brawl session lacks MachineSession's rule that holds back remote inputs arriving
+in the last 5.5-8 ms before a frame's boundary (they roll back in the next frame's sleep instead of making this frame
+late); that tail is what the hold waits for, in Dolphin's Brawl too. And a late frame could be covered by one more
+predicted picture of the frame before, instead of every frame waiting for it.
