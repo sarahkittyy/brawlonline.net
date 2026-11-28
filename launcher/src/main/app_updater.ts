@@ -3,7 +3,7 @@ import type { LauncherUpdateMode } from "@common/launcher_update";
 import { getLauncherUpdateMode } from "@common/launcher_update";
 import { PRODUCT_NAME } from "@common/product";
 import type { SettingsManager } from "@settings/settings_manager";
-import { app } from "electron";
+import { app, session } from "electron";
 import log from "electron-log";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import { AppImageUpdater, autoUpdater } from "electron-updater";
@@ -34,6 +34,15 @@ export const INSTALL_IDLE_POLL_MS = 15 * 1000; // 15 seconds
  * requests never emit, so a stalled download waited until the network itself gave up (bug report #119).
  */
 export const DOWNLOAD_STALL_MS = 60 * 1000; // 1 minute
+/**
+ * A download that gets less than this in DOWNLOAD_STALL_MS is started again too (about 17 KB/s, at which
+ * the 105 MB installer takes over 100 minutes). One crawled at under 1% in 100 s, too little for the bar
+ * to leave 0% but enough to keep the stall check from firing, through two launcher starts, while the
+ * same file came in 2 s after the player's third start (bug report #385).
+ */
+export const DOWNLOAD_MIN_BYTES_PER_STALL_WINDOW = 1024 * 1024;
+/** The session electron-updater downloads in (electron-updater's getNetSession: the same partition). */
+const UPDATER_SESSION_PARTITION = "electron-updater";
 /** How long after each failed download it is tried again; past the last, the bar offers the manual download. */
 export const DOWNLOAD_RETRY_DELAYS_MS = [5 * 1000, 30 * 1000, 2 * 60 * 1000];
 
@@ -66,7 +75,22 @@ export function describeInstallerLog(dir: string = os.tmpdir()): string {
 /** electron-updater's lines on how it ran the installer: main.log keeps only warn and above. */
 const INSTALL_LINE = /^(Install|Executing|Cannot run installer|isAdminRightsRequired)/;
 
-type UpdateDownload = { promise: Promise<unknown>; cancel: () => void; stalled: boolean; announced: boolean };
+/** Closes the connections of electron-updater's session, so its next request opens new ones. */
+function closeUpdaterConnections(): Promise<void> {
+  return session.fromPartition(UPDATER_SESSION_PARTITION, { cache: false }).closeAllConnections();
+}
+
+type UpdateDownload = {
+  promise: Promise<unknown>;
+  cancel: () => void;
+  stalled: boolean;
+  announced: boolean;
+  /** When the check that started the download returned (Date.now()), for main.log's line once it is done. */
+  startedAt: number;
+  /** The start of the current DOWNLOAD_STALL_MS window and the bytes it began at. */
+  windowAt: number;
+  windowBytes: number;
+};
 
 /** Thrown when Dolphin is asked to start while a newer launcher is out. */
 export class LauncherUpdateRequiredError extends Error {
@@ -186,7 +210,15 @@ export class AppUpdater {
    * over a flaky line or QUIC failed once and stayed failed until the next periodic check (#119).
    */
   private watchDownload(promise: Promise<unknown>, cancel: () => void): void {
-    const download: UpdateDownload = { promise, cancel, stalled: false, announced: false };
+    const download: UpdateDownload = {
+      promise,
+      cancel,
+      stalled: false,
+      announced: false,
+      startedAt: Date.now(),
+      windowAt: 0,
+      windowBytes: 0,
+    };
     this.download = download;
     const settle = () => {
       if (this.download === download) {
@@ -210,10 +242,36 @@ export class AppUpdater {
     if (!download) {
       return;
     }
+    if (download.stalled) {
+      return;
+    }
+    const now = Date.now();
     if (!download.announced) {
       // Logged at the first data, so the periodic checks finding a finished download again log nothing.
       download.announced = true;
+      download.windowAt = now;
+      download.windowBytes = progress.transferred;
       log.warn(`Launcher update ${this.availableVersion ?? ""} downloading (${progress.total} bytes)`);
+    } else if (progress.transferred < progress.total && now - download.windowAt >= DOWNLOAD_STALL_MS) {
+      const received = progress.transferred - download.windowBytes;
+      if (received < DOWNLOAD_MIN_BYTES_PER_STALL_WINDOW) {
+        log.warn(
+          `Launcher update download received ${Math.round(received / 1024)} KB in ` +
+            `${Math.round((now - download.windowAt) / 1000)} s at ${Math.floor(progress.percent)}%: starting it again`,
+        );
+        this.restartDownload(download);
+        return;
+      }
+      download.windowAt = now;
+      download.windowBytes = progress.transferred;
+    }
+    if (progress.transferred >= progress.total) {
+      // How long it took, for the next report of a slow update.
+      const seconds = Math.max((now - download.startedAt) / 1000, 0.1);
+      log.warn(
+        `Launcher update download received all of it in ${seconds.toFixed(1)} s ` +
+          `(${(progress.total / 1e6 / seconds).toFixed(1)} MB/s)`,
+      );
     }
     this.clearStallTimer();
     // Watched from the first data to the last: on macOS Squirrel.Mac then installs the downloaded zip
@@ -225,10 +283,16 @@ export class AppUpdater {
           `Launcher update download received nothing for ${DOWNLOAD_STALL_MS / 1000} s ` +
             `at ${Math.floor(progress.percent)}%: starting it again`,
         );
-        download.stalled = true;
-        download.cancel();
+        this.restartDownload(download);
       }, DOWNLOAD_STALL_MS);
     }
+  }
+
+  /** Cancels a stalled or crawling download: onDownloadError then tries it again. */
+  private restartDownload(download: UpdateDownload): void {
+    this.clearStallTimer();
+    download.stalled = true;
+    download.cancel();
   }
 
   private clearStallTimer(): void {
@@ -247,7 +311,11 @@ export class AppUpdater {
       if (!this.retryTimer) {
         this.retryTimer = setTimeout(() => {
           this.retryTimer = undefined;
-          this.checkForUpdates().catch(() => undefined);
+          // On new connections: Chromium would send the retry down the connection the failed one used,
+          // which can be what crawled (a new launcher's got the same file in 2 s, bug report #385).
+          closeUpdaterConnections()
+            .catch((err: unknown) => log.warn("Closing the update download's connections failed:", err))
+            .finally(() => this.checkForUpdates().catch(() => undefined));
         }, delay);
       }
       return;

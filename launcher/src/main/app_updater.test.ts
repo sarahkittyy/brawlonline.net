@@ -5,9 +5,16 @@ import path from "path";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { failedEvent } = vi.hoisted(() => ({ failedEvent: vi.fn(async () => undefined) }));
+const { failedEvent, closeAllConnections, fromPartition } = vi.hoisted(() => {
+  const closeAllConnections = vi.fn(async () => undefined);
+  return {
+    failedEvent: vi.fn(async () => undefined),
+    closeAllConnections,
+    fromPartition: vi.fn(() => ({ closeAllConnections })),
+  };
+});
 
-vi.mock("electron", () => ({ app: { getVersion: () => "0.1.0", isPackaged: true } }));
+vi.mock("electron", () => ({ app: { getVersion: () => "0.1.0", isPackaged: true }, session: { fromPartition } }));
 vi.mock("electron-log", () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 // electron-updater's autoUpdater, as an emitter whose checks the tests answer.
 vi.mock("electron-updater", async () => {
@@ -30,6 +37,7 @@ import { autoUpdater as realAutoUpdater } from "electron-updater";
 import {
   AppUpdater,
   describeInstallerLog,
+  DOWNLOAD_MIN_BYTES_PER_STALL_WINDOW,
   DOWNLOAD_RETRY_DELAYS_MS,
   DOWNLOAD_STALL_MS,
   INSTALL_IDLE_POLL_MS,
@@ -94,6 +102,8 @@ describe("AppUpdater", () => {
     autoUpdater.checkForUpdates.mockReset();
     autoUpdater.quitAndInstall.mockReset();
     failedEvent.mockClear();
+    closeAllConnections.mockClear();
+    fromPartition.mockClear();
     updater = new AppUpdater(settingsManager);
   });
 
@@ -189,6 +199,47 @@ describe("AppUpdater", () => {
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
     expect(failedEvent).not.toHaveBeenCalled();
     second.resolve();
+  });
+
+  it("starts a crawling download again, on new connections (bug report #385)", async () => {
+    const first = pendingDownload();
+    feedOffers("0.2.0", first.promise, first.token);
+    await updater.checkForUpdates();
+    // Some data every 10 s (so the stall check never fires), 0.5% (725 KB) a minute: the bar stays at 0%.
+    progress(0.1);
+    for (let i = 1; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      progress(0.1 + i * 0.08);
+      expect(first.token.cancel).not.toHaveBeenCalled();
+    }
+    const second = pendingDownload();
+    feedOffers("0.2.0", second.promise, second.token);
+    await vi.advanceTimersByTimeAsync(10_000);
+    progress(0.6);
+    expect(first.token.cancel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_RETRY_DELAYS_MS[0]);
+    expect(fromPartition).toHaveBeenCalledWith("electron-updater", { cache: false });
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(closeAllConnections.mock.invocationCallOrder[0]).toBeLessThan(
+      autoUpdater.checkForUpdates.mock.invocationCallOrder[1],
+    );
+    expect(failedEvent).not.toHaveBeenCalled();
+    second.resolve();
+  });
+
+  it("lets a slow download that keeps going finish", async () => {
+    const download = pendingDownload();
+    feedOffers("0.2.0", download.promise, download.token);
+    await updater.checkForUpdates();
+    // 1% (1.45 MB) a minute, over the minimum.
+    expect(145_000_000 / 100).toBeGreaterThan(DOWNLOAD_MIN_BYTES_PER_STALL_WINDOW);
+    for (let second = 0; second <= 10 * 60; second += 5) {
+      progress(second / 60);
+      await vi.advanceTimersByTimeAsync(5000);
+    }
+    expect(download.token.cancel).not.toHaveBeenCalled();
+    download.resolve();
   });
 
   it("does not cancel a download once all of it has arrived (macOS then installs it, with no progress)", async () => {
