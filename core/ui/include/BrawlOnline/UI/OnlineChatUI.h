@@ -80,6 +80,8 @@ struct TestFrame
   bool member_menu_open = false;
   std::string menu_uid;
   std::array<float, 4> ignore_item{};  // the menu's Ignore / Unignore item (x0, y0, x1, y1)
+  std::array<float, 4> report_item{};    // its Report... item
+  std::array<float, 4> report_button{};  // the Report button of its question (zero until asked)
   // The menu bar's Options (its label), whether its menu is open, and its text size items.
   std::array<float, 4> options_menu{};
   bool options_menu_open = false;

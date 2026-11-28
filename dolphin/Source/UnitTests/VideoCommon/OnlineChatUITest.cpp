@@ -246,6 +246,44 @@ TEST_F(OnlineChatUITest, ClickingANameOpensItsMenu)
   }
 }
 
+// Report... asks first, in the same menu, and its Report button sends Bob's messages to mm (the
+// menu item closed the menu, so the question never came and nothing was ever reported).
+TEST_F(OnlineChatUITest, ReportAsksThenSendsTheReport)
+{
+  JoinWithBob();
+  BobSays("second");
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  ASSERT_TRUE(Chat::TakeOutbox().empty());
+  const UI::TestFrame::Name name = m_frames.back().names.at(0);
+  Click((name.x0 + name.x1) / 2, (name.y0 + name.y1) / 2, 0);
+  Frame();
+  ASSERT_TRUE(Frame().member_menu_open);
+  EXPECT_EQ(m_frames.back().report_button, (std::array<float, 4>{}));
+  ClickItem(m_frames.back().report_item);
+  ASSERT_TRUE(m_frames.back().member_menu_open);
+  ASSERT_NE(m_frames.back().report_button, (std::array<float, 4>{}));
+  ASSERT_TRUE(Chat::TakeOutbox().empty());
+
+  ClickItem(m_frames.back().report_button);
+  EXPECT_FALSE(m_frames.back().member_menu_open);
+  std::vector<picojson::object> reports;
+  for (const std::string& json : Chat::TakeOutbox())
+  {
+    picojson::value v;
+    ASSERT_TRUE(picojson::parse(v, json).empty());
+    if (v.get("type").to_str() == "chat-report")
+      reports.push_back(v.get<picojson::object>());
+  }
+  ASSERT_EQ(reports.size(), 1u);
+  EXPECT_EQ(reports[0]["group"].to_str(), GROUP);
+  EXPECT_EQ(reports[0]["from"].to_str(), BOB);
+  const auto& messages = reports[0]["messages"].get<picojson::array>();
+  ASSERT_EQ(messages.size(), 2u);
+  EXPECT_EQ(messages[0].get("text").to_str(), "hello");
+  EXPECT_EQ(messages[1].get("text").to_str(), "second");
+}
+
 TEST_F(OnlineChatUITest, NamesWorkWithAMenuOpenAndQuickClicks)
 {
   JoinWithBob();

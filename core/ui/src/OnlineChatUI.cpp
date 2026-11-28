@@ -892,13 +892,28 @@ void DrawMemberMenu()
       Online::Chat::SetHidden(m->uid, !m->hidden);
       ImGui::CloseCurrentPopup();
     }
+    // It leaves the menu open for the question below: a menu item closes its popup, and the next
+    // click on a name starts the menu without the question, so no report was ever sent.
+    ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
     if (ImGui::MenuItem("Report..."))
       s.confirm_report = true;
+    ImGui::PopItemFlag();
+    if (s_recording)
+    {
+      s_frame.report_item = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                             ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+    }
   }
   else
   {
     ImGui::TextUnformatted("Send their recent messages to the moderators?");
-    if (ImGui::Button("Report"))
+    const bool report = ImGui::Button("Report");
+    if (s_recording)
+    {
+      s_frame.report_button = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                               ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+    }
+    if (report)
     {
       if (!Online::Chat::Report(m->uid, ""))
         SetNotice("Nothing to report.");
