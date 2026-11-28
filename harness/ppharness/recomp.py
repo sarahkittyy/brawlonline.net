@@ -110,11 +110,27 @@ def set_toml(text: str, settings: dict[str, dict[str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Where the next recomp test window goes: a 640x480 cell on the main monitor (the LG, 2560x1440 at
+# 0,0), 4 across and 2 down, so a run's windows sit side by side instead of on top of each other.
+_window_slot = 0
+
+
+def window_settings() -> dict[str, str]:
+    """A recomp test window: windowed, 640x480 (its smallest), in the next cell. The recomp's own
+    default is "borderless" (fullscreen), which put a screen-sized window over whatever was open at
+    every test's start."""
+    global _window_slot
+    n, _window_slot = _window_slot, _window_slot + 1
+    return {"display_mode": '"windowed"', "window_width": "640", "window_height": "480",
+            "window_x": str(10 + (n % 4) * 630), "window_y": str(40 + (n // 4 % 2) * 520)}
+
+
 def test_config(text: str) -> str:
-    """Test runs are silent, as Dolphin's (InstanceConfig.audio): [audio] muted, volume 0. Plus
-    PPHARNESS_RECOMP_TOML ("section.key=value;..."), such as video.resolution_multiplier=0.5 for
-    WSL's software renderer."""
-    settings: dict[str, dict[str, str]] = {"audio": {"muted": "true", "volume": "0.0"}}
+    """Test runs are silent, as Dolphin's (InstanceConfig.audio): [audio] muted, volume 0, and in a
+    small window (window_settings). Plus PPHARNESS_RECOMP_TOML ("section.key=value;..."), such as
+    video.resolution_multiplier=0.5 for WSL's software renderer or video.display_mode="borderless"."""
+    settings: dict[str, dict[str, str]] = {"audio": {"muted": "true", "volume": "0.0"},
+                                           "video": window_settings()}
     for item in os.environ.get("PPHARNESS_RECOMP_TOML", "").split(";"):
         key, sep, value = item.partition("=")
         section, dot, name = key.strip().partition(".")
@@ -305,6 +321,9 @@ class RecompInstance(DolphinInstance):
             "BRAWL_SD_VOLATILE_WRITES": "1",
             "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0",
             "SDL_JOYSTICK_HIDAPI": "0",
+            # SDL3's hint (read from the environment): the window shows without taking the focus
+            # (SW_SHOWNA), so a test's window never pulls the keyboard from the window in use.
+            "SDL_WINDOW_ACTIVATE_WHEN_SHOWN": "0",
         })
         # A playback instance's comm file (Dolphin's `-i <comm.json>`, the launcher's playback Dolphin):
         # the recomp follows it from BRAWL_ONLINE_REPLAY_COMM.
