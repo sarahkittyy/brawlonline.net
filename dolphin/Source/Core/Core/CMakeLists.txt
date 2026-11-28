@@ -265,6 +265,8 @@ add_library(core
   HW/HSP/HSP_DeviceNull.h
   HW/HW.cpp
   HW/HW.h
+  HW/InputDisplayFeed.cpp
+  HW/InputDisplayFeed.h
   HW/MagCard/C1231BR.cpp
   HW/MagCard/C1231BR.h
   HW/MagCard/C1231LR.cpp

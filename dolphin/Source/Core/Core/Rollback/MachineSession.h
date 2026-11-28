@@ -316,6 +316,12 @@ void MotorCommand(int port, u32 type);
 // player plays that Wii Remote.
 bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state);
 
+// CPU thread: the pads the input display shows (Core/HW/InputDisplayFeed.h; a bit each, 0-3 the
+// GameCube ports, 4-7 the Wii Remotes): this player's controller, and with [Online]
+// InputDisplayEveryone every other player's. 0 when the session is not armed (the display shows
+// the controller pressed last).
+u32 InputDisplayPads();
+
 // Harness: replaces what the local Wii Remote reads (core buttons; a Nunchuk's stick and C/Z).
 struct WiimoteOverride
 {

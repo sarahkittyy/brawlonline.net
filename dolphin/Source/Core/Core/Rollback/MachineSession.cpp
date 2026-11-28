@@ -9463,6 +9463,25 @@ bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
   return true;
 }
 
+u32 InputDisplayPads()
+{
+  if (!IsArmed())
+    return 0;
+  const bool everyone = Config::Get(Config::ONLINE_INPUT_DISPLAY_EVERYONE);
+  u32 pads = 0;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    const u8 flags = s.latched[slot][0];
+    if (slot == s.opts.local_slot)
+      pads |= s.controller[slot] == Controller::WiiRemote ? 1u << (4 + slot) : 1u << slot;
+    else if (everyone && (flags & INPUT_GC_PRESENT))
+      pads |= 1u << slot;
+    else if (everyone && (flags & INPUT_WIIMOTE_CONNECTED))
+      pads |= 1u << (4 + slot);
+  }
+  return pads;
+}
+
 void SetWiimoteOverride(std::optional<WiimoteOverride> value)
 {
   std::lock_guard lk(s.mutex);

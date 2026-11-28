@@ -28,6 +28,10 @@
 //     0x200), 1 0x10000, 2 0x20000, PLUS 0x1000, its D-pad upright (as a GameCube's); the Nunchuk's
 //     C 0x40000 (with 0x400) and Z 0x10, its stick +0x30 (-100..100).
 //   MINUS (0x80000) and HOME never reach the record in a match.
+//
+// Every other game (Other Games, and any game in a whole-machine session) has no gfPadSystem: there
+// the source is what Dolphin's hardware gives the game (SetHardwarePad, OnHardwareField), turned
+// into the same records (dolphin Core/HW/InputDisplayFeed.cpp).
 
 #pragma once
 
@@ -79,6 +83,17 @@ bool Decode(const u8* record, Pad* out);
 void OnFrameEnd(const u8* pads, u32 ports);
 // Reads the eight pads from guest memory (when gfPadSystem exists) and calls OnFrameEnd.
 void SampleGuest(u32 ports);
+
+// Any other game: what Dolphin's hardware gave the game, the SI's GameCube controllers and the
+// Bluetooth stack's Wii Remotes, as a Pad Decode would make (the same bits, sticks and triggers).
+// CPU thread, at each read the game makes (not a rollback's re-run): `pad` 0-3 GameCube port, 4-7
+// Wii Remote. A pad the game stops reading for two seconds has no controller.
+void SetHardwarePad(u32 pad, const Pad& p);
+// CPU thread, at the end of each VI field that is shown. Unless the game's own pads were read in
+// the last half second (OnFrameEnd: Brawl's stand over these), the view becomes the hardware's:
+// `pads` a bit for each pad (0-7) to show (a whole-machine session: this player's, or every
+// player's), 0: this machine's controller, the pad pressed last.
+void OnHardwareField(u32 pads);
 // Any thread: the last frame's view.
 View Get();
 // A new game (the core's reset at boot): nothing to show until its first frame.

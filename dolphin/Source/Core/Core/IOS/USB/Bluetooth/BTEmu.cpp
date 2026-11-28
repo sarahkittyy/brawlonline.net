@@ -23,6 +23,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/HW/InputDisplayFeed.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/SysConf.h"
 #include "Core/System.h"
@@ -410,6 +411,7 @@ void BluetoothEmuDevice::Update()
 
       movie.PlayWiimote(i, &wiimote_states[i]);
       movie.CheckWiimoteStatus(i, wiimote_states[i]);
+      InputDisplayFeed::OnWiimoteRead(i, wiimote_states[i]);
     }
 
     for (size_t i = 0; i < m_wiimotes.size(); ++i)

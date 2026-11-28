@@ -25,6 +25,17 @@ std::mutex s_mutex;
 View s_view;
 // The pad this machine's player last pressed (shown outside a gameplay session); -1: none yet.
 int s_active_pad = -1;
+// Fields counted by OnHardwareField; the pads the hardware gave the game (SetHardwarePad) and the
+// field each was last given in (0: never).
+u64 s_fields = 1;
+std::array<Pad, PADS> s_hardware{};
+std::array<u64, PADS> s_hardware_field{};
+// Fields left for which the game's own pads (OnFrameEnd) stand over the hardware's.
+u32 s_guest_fields = 0;
+constexpr u32 GUEST_HOLD_FIELDS = 30;
+// A pad the game has not read for this long has no controller (a GameCube port nothing reads, a
+// Wii Remote that disconnected): a game polls its controllers at least once a frame.
+constexpr u64 HARDWARE_STALE_FIELDS = 120;
 
 // A stick this far from the middle counts as a press (both kinds' units: GameCube -128..127, Wii
 // -100..100), so a resting stick's drift does not take the display to its controller.
@@ -61,31 +72,29 @@ bool Decode(const u8* r, Pad* out)
   return true;
 }
 
-void OnFrameEnd(const u8* pads, u32 ports)
+namespace
+{
+// The pads of a frame (GameCube 0-3, Wii Remotes 4-7) into the view: `show` a bit for each pad to
+// show (as its in-game port: pad % 4), 0: this machine's controller, the pad pressed last.
+// Under s_mutex.
+void Publish(std::array<Pad, PADS>& decoded, const std::array<bool, PADS>& has, u32 show)
 {
   View v;
-  std::array<Pad, PADS> decoded{};
-  std::array<bool, PADS> has{};
   for (u32 i = 0; i < PADS; ++i)
-  {
-    has[i] = Decode(pads + i * PAD_SIZE, &decoded[i]);
     decoded[i].pad = static_cast<int>(i);
-  }
-  std::lock_guard lk(s_mutex);
-  if (ports != 0)
+  if (show != 0)
   {
-    // Each port's record is in its GameCube or its Wii Remote pad (the other has no controller).
+    // In port order, a port's GameCube controller before its Wii Remote.
     for (u32 port = 0; port < MAX_SHOWN; ++port)
     {
-      if (!(ports & (1u << port)))
-        continue;
-      const u32 wii = port + 4;
-      const u32 pick = has[port] ? port : has[wii] ? wii : PADS;
-      if (pick == PADS)
-        continue;
-      Pad p = decoded[pick];
-      p.port = static_cast<int>(port);
-      v.pads[v.count++] = p;
+      for (const u32 i : {port, port + 4})
+      {
+        if (!(show & (1u << i)) || !has[i] || v.count >= MAX_SHOWN)
+          continue;
+        Pad p = decoded[i];
+        p.port = static_cast<int>(port);
+        v.pads[v.count++] = p;
+      }
     }
   }
   else
@@ -120,6 +129,59 @@ void OnFrameEnd(const u8* pads, u32 ports)
   v.frames = s_view.frames + 1;
   s_view = v;
 }
+}  // namespace
+
+void OnFrameEnd(const u8* pads, u32 ports)
+{
+  std::array<Pad, PADS> decoded{};
+  std::array<bool, PADS> has{};
+  for (u32 i = 0; i < PADS; ++i)
+    has[i] = Decode(pads + i * PAD_SIZE, &decoded[i]);
+  // Each port's record is in its GameCube or its Wii Remote pad (the other has no controller).
+  u32 show = 0;
+  for (u32 port = 0; port < MAX_SHOWN; ++port)
+  {
+    if (ports & (1u << port))
+      show |= has[port] ? 1u << port : has[port + 4] ? 1u << (port + 4) : 0;
+  }
+  std::lock_guard lk(s_mutex);
+  s_guest_fields = GUEST_HOLD_FIELDS;
+  if (ports != 0 && show == 0)
+  {
+    // None of the ports has a controller this frame: nothing to show.
+    const u32 frames = s_view.frames + 1;
+    s_view = View{};
+    s_view.frames = frames;
+    return;
+  }
+  Publish(decoded, has, show);
+}
+
+void SetHardwarePad(u32 pad, const Pad& p)
+{
+  if (pad >= PADS)
+    return;
+  std::lock_guard lk(s_mutex);
+  s_hardware[pad] = p;
+  s_hardware_field[pad] = s_fields;
+}
+
+void OnHardwareField(u32 pads)
+{
+  std::lock_guard lk(s_mutex);
+  ++s_fields;
+  // The game's own pads were read lately (Brawl): those, not the hardware's.
+  if (s_guest_fields > 0)
+  {
+    --s_guest_fields;
+    return;
+  }
+  std::array<Pad, PADS> decoded = s_hardware;
+  std::array<bool, PADS> has{};
+  for (u32 i = 0; i < PADS; ++i)
+    has[i] = s_hardware_field[i] != 0 && s_fields - s_hardware_field[i] <= HARDWARE_STALE_FIELDS;
+  Publish(decoded, has, pads);
+}
 
 void SampleGuest(u32 ports)
 {
@@ -144,6 +206,8 @@ void Reset()
   std::lock_guard lk(s_mutex);
   s_view = View{};
   s_active_pad = -1;
+  s_hardware_field.fill(0);
+  s_guest_fields = 0;
 }
 
 void PollLauncherFile(const std::string& online_dir)

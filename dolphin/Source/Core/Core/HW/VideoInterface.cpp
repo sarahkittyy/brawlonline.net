@@ -25,6 +25,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/Harness/Harness.h"
 #include "Core/FifoPlayer/FifoPlayer.h"
+#include "Core/HW/InputDisplayFeed.h"
 #include "Core/HW/MMIO.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI/SI.h"
@@ -908,6 +909,8 @@ void VideoInterfaceManager::EndField(FieldType field, u64 ticks)
   m_system.GetPerfMetrics().CountVBlank();
   m_system.GetVideoEvents().vi_end_field_event.Trigger();
   Core::OnFrameEnd(m_system);
+  // The input display in any game but Brawl: what the controllers gave the game this field.
+  InputDisplayFeed::OnViField();
 }
 
 // Purpose: Send VI interrupt when triggered

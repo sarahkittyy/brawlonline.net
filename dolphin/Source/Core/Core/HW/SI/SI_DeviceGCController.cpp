@@ -21,6 +21,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "BrawlOnline/Rollback/GameplayRollback.h"
+#include "Core/HW/InputDisplayFeed.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
@@ -240,6 +241,7 @@ DataResponse CSIDevice_GCController::GetData(u32& hi, u32& low)
 
   if (HandleButtonCombos(pad_status) == COMBO_ORIGIN)
     pad_status.button |= PAD_GET_ORIGIN;
+  InputDisplayFeed::OnGameCubeRead(m_device_number, pad_status);
 
   hi = MapPadStatus(pad_status);
 

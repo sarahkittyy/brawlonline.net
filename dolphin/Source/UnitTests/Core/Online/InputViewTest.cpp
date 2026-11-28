@@ -138,3 +138,55 @@ TEST(InputView, OutsideASessionTheControllerPressedLast)
   OnFrameEnd(p.data(), 0);
   EXPECT_EQ(Get().pads[0].pad, 0);
 }
+
+// Any other game (Other Games): what the hardware gave the game, at each VI field.
+TEST(InputView, OtherGamesTheHardwaresPads)
+{
+  Reset();
+  Pad gc;
+  gc.buttons = 0x100;
+  gc.stick_x = 127;
+  SetHardwarePad(0, gc);
+  Pad wii;
+  wii.type = Type::Nunchuk;
+  SetHardwarePad(4 + 2, wii);
+  // Outside a session: the controller pressed last.
+  OnHardwareField(0);
+  View v = Get();
+  EXPECT_EQ(v.frames, 1u);
+  ASSERT_EQ(v.count, 1u);
+  EXPECT_EQ(v.pads[0].pad, 0);
+  EXPECT_EQ(v.pads[0].port, -1);
+  EXPECT_EQ(v.pads[0].buttons, 0x100u);
+  EXPECT_EQ(v.pads[0].stick_x, 127);
+  // A whole-machine session: the pads it names, by their port.
+  OnHardwareField(1u << (4 + 2));
+  v = Get();
+  ASSERT_EQ(v.count, 1u);
+  EXPECT_EQ(v.pads[0].pad, 6);
+  EXPECT_EQ(v.pads[0].port, 2);
+  EXPECT_EQ(v.pads[0].type, Type::Nunchuk);
+  OnHardwareField(0b1000001);
+  v = Get();
+  ASSERT_EQ(v.count, 2u);
+  EXPECT_EQ(v.pads[0].port, 0);
+  EXPECT_EQ(v.pads[1].port, 2);
+  // Brawl's own pads stand over the hardware's while it reads them, and half a second after.
+  Pads p = Empty();
+  Plug(p, 1, Type::GameCube, 0x200);
+  OnFrameEnd(p.data(), 0b10);
+  for (int i = 0; i < 30; ++i)
+    OnHardwareField(0);
+  EXPECT_EQ(Get().pads[0].pad, 1);
+  OnHardwareField(0);
+  EXPECT_EQ(Get().pads[0].pad, 0);
+  // A pad the game stops reading (no controller there): gone after two seconds.
+  for (int i = 0; i < 120; ++i)
+    OnHardwareField(1u << 0);
+  EXPECT_EQ(Get().count, 0u);
+  // And a new boot forgets the last game's.
+  SetHardwarePad(0, gc);
+  Reset();
+  OnHardwareField(0);
+  EXPECT_EQ(Get().count, 0u);
+}
