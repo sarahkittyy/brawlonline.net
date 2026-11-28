@@ -315,6 +315,10 @@ struct PeerLink
   // every player's digest matches it).
   std::string epoch_digest;
   bool dropped = false;  // GekkoNet was told (DropLeftPeers)
+  // When its hello came on `peer` (KeepLink), and whether that link dropped while the session ran
+  // and has not come back (ENet's DISCONNECT: the player is not gone for it, ReconnectLostLinks).
+  Clock::time_point hello_at{};
+  bool link_lost = false;
   Clock::time_point last_connect{};
   ENetPeer* connecting = nullptr;  // this side's latest connection attempt
   double rtt_ms = -1;
@@ -1022,6 +1026,28 @@ int SlotOf(ENetPeer* peer)
 
 void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six);
 
+// A link that drops while the session runs is connected again (the connect loop, both sides), and
+// GekkoNet's packets go on over the new one; whether the player left is GekkoNet's to say (its
+// silence timeout, DISCONNECT_TIMEOUT_MS) or the player's ("leave"), not ENet's. ENet times a link
+// out on its own clock: in a four-player TvC room, one player's link to another dropped on that
+// player's side only, it unplugged the other at once, its claims then made the remaining two drop
+// that player too, and the two of them were out of the game while their link was back within a
+// second (bug report #383).
+// The no-link lines (LogNoLink) count from the drop.
+void LoseLink(PeerLink& p)
+{
+  p.link_lost = true;
+  p.link_wanted = Clock::now();
+  p.no_link_logs = 0;
+  p.attempts = 0;
+  p.unkept_hellos = 0;
+}
+
+// How long after a link comes up the upper slot's hello on another connection means it lost that
+// link (OnHello). Its attempts from before the link came up are a second apart and reset each time
+// (the connect loop), so none connects this late.
+constexpr auto RELINK_AFTER = std::chrono::seconds(3);
+
 // Both sides connect to each other (needed through NATs); of two connections for the same pair,
 // both keep the one the lower slot started, so they agree without another round trip.
 void OnHello(ENetPeer* peer, const picojson::object& msg)
@@ -1052,6 +1078,32 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
   if (!keep)
   {
     ++p.unkept_hellos;
+    // The upper slot connects only while it has no link (the connect loop). So its hello on a
+    // connection of its own, well after the link both keep came up, says that link dropped on its
+    // side (ENet timed it out there, bug report #383), while this side's end of it still looks
+    // connected and would idle until ENet times it out here too, which takes longer than GekkoNet
+    // waits for a silent player. Drop this end and connect again now: the upper slot keeps the
+    // lower slot's connection.
+    const auto playing = msg.find("playing");
+    if (lower_is_me && p.peer && p.hello && p.peer != peer && s.phase == Phase::Running &&
+        Plays(slot) && playing != msg.end() && playing->second.is<bool>() &&
+        playing->second.get<bool>() && Clock::now() - p.hello_at >= RELINK_AFTER)
+    {
+      ENetPeer* old = p.peer;
+      for (ENetPeer** e : {&p.connecting, &p.connecting6, &p.cand6})
+      {
+        if (*e == old)
+          *e = nullptr;
+      }
+      old->data = nullptr;
+      enet_peer_reset(old);
+      p.peer = nullptr;
+      p.hello = false;
+      p.kept6 = false;
+      LoseLink(p);
+      p.last_connect = {};
+      AddLog(fmt::format("player {} lost the link on its side: linking again", slot + 1));
+    }
     return;  // the other connection is the one both keep; this one idles until it drops
   }
   // IPv6 (Online/Ipv6.h): the lower slot's connection over IPv6 is kept only once that slot says
@@ -1106,7 +1158,15 @@ void KeepLink(PeerLink& p, ENetPeer* peer, const picojson::object& msg, bool six
   if (p.peer && p.peer != peer)
     enet_peer_disconnect_later(p.peer, 0);
   if (p.peer != peer)
+  {
     p.min_rtt_ms = -1;
+    p.hello_at = Clock::now();
+  }
+  if (p.link_lost)
+  {
+    p.link_lost = false;
+    AddLog(fmt::format("the link to player {} is back", slot + 1));
+  }
   p.peer = peer;
   p.hello = true;
   {
@@ -2927,7 +2987,20 @@ void NetThread()
     }
     StepIpv6Links(now);
     for (PeerLink& p : s.peers)
+    {
+      // A link lost while the session ran (LoseLink) and still down when it stops running (an
+      // epoch starts): the player left, as with a link that drops in an epoch.
+      if (p.link_lost && !p.hello && s.phase != Phase::Running)
+      {
+        p.link_lost = false;
+        if (!p.left && (s.phase == Phase::Epoch || s.phase == Phase::Starting))
+        {
+          p.left = true;
+          AddLog(fmt::format("player {} has no link at the epoch: it left", p.slot + 1));
+        }
+      }
       LogNoLink(p, now);
+    }
     // The IPv4 host, then the IPv6 one (Online/Ipv6.h) if the session has it.
     for (ENetHost* host : {s.host, s.host6})
     {
@@ -3083,10 +3156,19 @@ void NetThread()
               p.peer = nullptr;
               p.hello = false;
               p.kept6 = false;
-              if (s.phase == Phase::Running || s.phase == Phase::Starting ||
-                  s.phase == Phase::Epoch)
+              // A player's link while the session runs: connected again, the player not gone for
+              // it (LoseLink). A joiner's, a player's gone from the room, and any at the start or
+              // in an epoch: the player left, as before.
+              const bool reconnect =
+                  s.phase == Phase::Running && Plays(p.slot) && !p.room_gone && !p.left;
+              if (reconnect)
+                LoseLink(p);
+              else if (s.phase == Phase::Running || s.phase == Phase::Starting ||
+                       s.phase == Phase::Epoch)
                 p.left = true;
-              AddLog(fmt::format("peer {} disconnected", p.slot));
+              AddLog(fmt::format("peer {} disconnected{}", p.slot,
+                                 reconnect ? "; connecting again (GekkoNet says whether it left)" :
+                                             ""));
               if (p.room_gone)
               {
                 // As ForgetLink (its link is down already).
