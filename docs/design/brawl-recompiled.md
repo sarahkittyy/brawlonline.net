@@ -150,7 +150,7 @@ Unpacks it into `versions/<tag>/`, without the upstream launcher (`Brawl Recompi
 ### 7.3 What would help from the releases
 
 - A small `manifest.json` asset: the protocol version (§7.4), the modes the release can play online (§8.3), and the least launcher version. Until then the launcher can only compare tags.
-- One engine per download (AVX2 / v2), which halves it; later binary diffs between versions.
+- One engine per download (AVX2 / v2), which halves it: done since recomp 77e041c (§26); later binary diffs between versions.
 
 ### 7.4 Compatibility
 
@@ -612,3 +612,49 @@ longer gaps.
 
 Not done: Dolphin fills a gap with its last granules (crossfaded) instead of silence; the recomp still plays silence
 when the game itself is too slow.
+
+## 26. The older CPUs' engine, a download of its own (2026-11-27)
+
+Sarah's board: "any alternative to shipping the two separate versions of the windows dlls? ... it's like 230mb more
+install". The Windows release held both engines: `engine_usa.dll` (x86-64-v3) and `engine_usa_v2.dll` (x86-64-v2, for
+processors without AVX2/FMA), about 245 MB each (84 MB compressed). Only about 1% of players need the second (1 of
+about 160 x86 CPUs in the bug-report logs, an i7-4930K, plus bug #189's Phenom II). Shipping only v2 to everyone was
+measured at +4% game-thread CPU a frame (v0.7.5, 9800X3D, replays 004 and 012, three interleaved rounds: 4.60 -> 4.77
+and 4.93 -> 5.14 ms; v2 has no FMA instruction, every fused multiply-add goes through `fmaf`); one DLL holding both
+would be as big as two.
+
+So releases since recomp 77e041c (branch `brawlonline/oldcpu-split`) split it:
+
+- `EmissaryRecomp-<tag>-Windows.zip` without `engine_usa_v2.dll` (88.6 MB instead of 172 MB from v0.7.5's files), and
+  `EmissaryRecomp-<tag>-Windows-OldCPU.zip` with only `EmissaryRecomp/engine_usa_v2.dll` (83.6 MB), in manifest.json
+  as `platforms."windows-oldcpu"`. Its name doesn't end in `-Windows.zip`, which the launcher and mm match.
+- `WiiCompiled.exe --engine` prints the engine the loader starts on this computer and exits without loading it. The
+  loader decides with the engines' own check of the processor (the recomp's `include/host_isa_features.h`, shared by
+  `host_cpu_baseline.cpp` and `engine_loader.cpp`), so its answer is always an engine that accepts the processor.
+  Started without the engine it needs, the loader says which file is missing and where it comes from.
+
+The launcher (`emissary.ts`, `missingEngine`) never writes down which engine a computer needs: it asks the loader
+before every start (once per launcher session), and gets the file when the answer names one the version's folder
+lacks.
+
+| When | What happens |
+|---|---|
+| Install / update | After unpacking, before the version becomes the one that plays: the loader names `engine_usa_v2.dll` -> the OldCPU zip is downloaded (size and sha256 checked) into the unfinished folder. Staged updates the same. |
+| Play | The loader names a file the folder lacks -> `engine_usa_v2.dll` is downloaded with Play's progress (like an update), then the game starts; when it can't be, Dolphin plays (`updateFailed`) and the next Play tries again. A missing `engine_usa.dll` installs the version again. |
+| Replay / spectate | Never waits for a download: Dolphin plays it this time, the engine is downloaded meanwhile, and the replay program's hard links are made again once it is there (the link marker lists the engines). |
+| Moved to an older computer | The next Play downloads it (84 MB). Moved to a newer one: the leftover v2 engine is unused and goes with the next update. |
+| No answer from the loader | `engine_usa_v2.dll` is downloaded when missing: a needless download never stops a start, a missing engine would. |
+| Releases before the split | Their loader doesn't answer `--engine` (it would start the game), so it is never asked: the launcher reads the program for the text `--engine` first. Their download has both engines anyway. |
+
+The OldCPU zip of a version other than the latest comes from that version's own release (`/releases/tags/<tag>`).
+
+Order: the launcher with this goes out before the first split recomp release. An older launcher installs only the
+main download, so on an older CPU it would get the loader's "engine_usa_v2.dll is missing" message until it updates.
+
+Checked: emissary.test.ts (50, 11 new: a newer CPU never downloads it; an older one gets it with the install; a moved
+install gets it before Play; Dolphin plays when it can't be downloaded and the next Play gets it; no answer; an old
+loader is never asked; the installed version's own release; replays; a missing main engine; a damaged download; the
+asset parse), with the engine check disabled 8 of them fail. Against the real files: the two zips packaged by
+release.py from v0.7.5's binaries with the new loader, served as a local release feed, the real `--engine`: installed
+without v2 on this PC, then with `BRAWL_ENGINE_V2` (a new session, as on an older CPU) a replay fell back to Dolphin, the
+245,735,176-byte engine was downloaded meanwhile, Play then started v0.7.5 and the replay program had it linked.

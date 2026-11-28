@@ -12,7 +12,10 @@
 //                               DLLs, Sys/ and wii_bootstrap/ at the top; upstream's v0.6.0 had
 //                               `engine/brawl-engine[.exe]` (it plays no one online). Without the
 //                               upstream launcher (whose updater would replace files under us) and
-//                               without the release's own portable.txt and UserData
+//                               without the release's own portable.txt and UserData. On Windows,
+//                               engine_usa_v2.dll (the engine for processors without AVX2) only
+//                               when this computer's loader names it (missingEngine): releases
+//                               since the split ship it in -Windows-OldCPU.zip
 //   current.json                the version that plays (its program, its manifest, what it can do)
 //   staged.json                 a newer version, downloaded while the game ran: played next time
 //   game/DATA/                  the disc's game partition (sys/, files/); game.json says whose
@@ -35,6 +38,7 @@ import { removeTree } from "utils/remove_tree";
 import { asDiskSpaceError, ensureFreeSpace } from "../install/disk_space";
 import { unlinkBrawlSave, unlinkShared } from "./launch";
 import type {
+  EmissaryAsset,
   EmissaryFallback,
   EmissaryJob,
   EmissaryManifest,
@@ -75,6 +79,18 @@ const PORTABLE_TEXT =
   "Brawl Online's EmissaryRecomp: settings, saves and logs stay in the UserData folder next to this file.\n";
 
 export type Platform = "win32" | "linux" | "darwin" | string;
+
+/** The Windows engine for processors without AVX2/FMA (x86-64-v2). */
+export const OLD_CPU_ENGINE = "engine_usa_v2.dll";
+/**
+ * The download holding only `EmissaryRecomp/engine_usa_v2.dll` (EmissaryRecomp's tools/release.py,
+ * since the split). Its name doesn't end in -Windows.zip (assetPattern).
+ */
+const OLD_CPU_ASSET = /-Windows-OldCPU\.zip$/i;
+/** In a loader that answers `--engine` (older ones would start the game instead). */
+const ENGINE_QUERY = "--engine";
+/** How long `WiiCompiled.exe --engine` may take (an antivirus scans a new program first). */
+const ENGINE_QUERY_TIMEOUT_MS = 20_000;
 
 /**
  * The release archive for `platform`, or null. `arch` is the machine's (an x64 launcher on Apple
@@ -158,20 +174,34 @@ export function parseRelease(v: unknown, platform: Platform, arch: string = proc
   if (!pattern) {
     throw new EmissaryError("EmissaryRecomp has no release for this computer yet.");
   }
-  const asset = (
-    r.assets as { name?: unknown; size?: unknown; browser_download_url?: unknown; digest?: unknown }[]
-  ).find((a) => typeof a?.name === "string" && pattern.test(a.name));
-  if (
-    !asset ||
-    typeof asset.browser_download_url !== "string" ||
-    !asset.browser_download_url.startsWith(DOWNLOAD_PREFIX) ||
-    typeof asset.size !== "number" ||
-    asset.size <= 0 ||
-    asset.size > MAX_ARCHIVE
-  ) {
+  const assets = r.assets as { name?: unknown; size?: unknown; browser_download_url?: unknown; digest?: unknown }[];
+  /** The asset whose name matches, when it is one to download; undefined: none; null: not a valid one. */
+  const assetOf = (re: RegExp): EmissaryAsset | null | undefined => {
+    const asset = assets.find((a) => typeof a?.name === "string" && re.test(a.name));
+    if (!asset) {
+      return undefined;
+    }
+    if (
+      typeof asset.browser_download_url !== "string" ||
+      !asset.browser_download_url.startsWith(DOWNLOAD_PREFIX) ||
+      typeof asset.size !== "number" ||
+      asset.size <= 0 ||
+      asset.size > MAX_ARCHIVE
+    ) {
+      return null;
+    }
+    const digest = typeof asset.digest === "string" ? /^sha256:([0-9a-f]{64})$/i.exec(asset.digest) : null;
+    return {
+      assetName: String(asset.name),
+      url: asset.browser_download_url,
+      size: asset.size,
+      sha256: digest ? digest[1].toLowerCase() : null,
+    };
+  };
+  const asset = assetOf(pattern);
+  if (!asset) {
     throw new EmissaryError(`EmissaryRecomp ${r.tag_name} has no download for this computer.`);
   }
-  const digest = typeof asset.digest === "string" ? /^sha256:([0-9a-f]{64})$/i.exec(asset.digest) : null;
   const manifest = (r.assets as { name?: unknown; browser_download_url?: unknown }[]).find(
     (a) =>
       a?.name === "manifest.json" &&
@@ -180,14 +210,49 @@ export function parseRelease(v: unknown, platform: Platform, arch: string = proc
   );
   return {
     version: r.tag_name,
-    assetName: String(asset.name),
-    url: asset.browser_download_url,
-    size: asset.size,
-    sha256: digest ? digest[1].toLowerCase() : null,
+    ...asset,
+    oldCpu: platform === "win32" ? assetOf(OLD_CPU_ASSET) ?? null : null,
     manifestUrl: manifest ? String(manifest.browser_download_url) : null,
     manifest: null,
   };
 }
+
+/** Asks a loader which engine it starts on this computer (askEngine, or a test double). */
+export type EngineQuery = (exe: string) => Promise<string | null>;
+
+/**
+ * `WiiCompiled.exe --engine`: the engine file the loader starts on this computer
+ * (`engine_usa.dll`, or `engine_usa_v2.dll` without AVX2), decided by the same check the engines
+ * make of the processor themselves; null when it gives no answer. Only for loaders that answer it
+ * (missingEngine): an older one would start the game.
+ */
+export const askEngine: EngineQuery = (exe) =>
+  new Promise((resolve) => {
+    let out = "";
+    let child;
+    try {
+      child = spawn(exe, [ENGINE_QUERY], {
+        cwd: path.dirname(exe),
+        windowsHide: true,
+        timeout: ENGINE_QUERY_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    child.stdout.on("data", (d) => {
+      out += String(d);
+      if (out.length > 256) {
+        child.kill();
+      }
+    });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => {
+      const name = out.trim();
+      resolve(code === 0 && /^engine_[a-z]+(_v2)?\.dll$/i.test(name) ? name : null);
+    });
+  });
 
 /** Compares release tags by their numbers (`v0.7.10` after `v0.7.9`). */
 export function compareTags(a: string, b: string): number {
@@ -385,6 +450,8 @@ export type EmissaryOptions = {
   fetch?: Fetch;
   extract?: ExtractFn;
   unpack?: UnpackFn;
+  /** Asks a loader for its engine (askEngine by default). */
+  askEngine?: EngineQuery;
   log?: (message: string) => void;
   onChange?: (state: EmissaryState) => void;
 };
@@ -410,6 +477,11 @@ export class EmissaryRecomp {
   private playbackRunning = false;
   /** Whether a version plays replays, for records from before current.json said (prepareForPlayback). */
   private readonly playbackFeature = new Map<string, boolean>();
+  /**
+   * The engine this computer's loader names (missingEngine), asked once while the launcher runs:
+   * never written down, so an install moved to another computer is asked again there.
+   */
+  private engineAnswer: string | null = null;
 
   constructor(private readonly opts: EmissaryOptions) {
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
@@ -527,6 +599,29 @@ export class EmissaryRecomp {
       this.log(`EmissaryRecomp: could not read the latest release (${this.releaseError})`);
     }
     return this.release;
+  }
+
+  /** The release `version` (the latest one when it is that one); null when GitHub doesn't say. */
+  private async releaseOf(version: string): Promise<EmissaryRelease | null> {
+    const latest = await this.latest();
+    if (latest?.version === version) {
+      return latest;
+    }
+    try {
+      const res = await fetchRetrying(
+        this.fetchImpl,
+        `${EMISSARY_API}/tags/${encodeURIComponent(version)}`,
+        { headers: { Accept: "application/vnd.github+json", "User-Agent": "BrawlOnline-Launcher" } },
+        (err) => this.log(`EmissaryRecomp: no answer from GitHub, asking again (${fetchErrorMessage(err)})`),
+      );
+      if (!res.ok) {
+        throw new EmissaryError(`GitHub answered HTTP ${res.status}`);
+      }
+      return parseRelease(await res.json(), this.platform, this.arch);
+    } catch (err) {
+      this.log(`EmissaryRecomp ${version}: could not read its release (${fetchErrorMessage(err)})`);
+      return null;
+    }
   }
 
   /** A release's manifest.json (the same one again for the same release); null without one or when unreadable. */
@@ -695,6 +790,16 @@ export class EmissaryRecomp {
           return { fallback: { reason: "updateFailed", message } };
         }
       }
+      if (s.status === "ready") {
+        try {
+          await this.ensureEngine({ reinstall: true });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.log(`EmissaryRecomp: its engine for this computer could not be downloaded, Dolphin plays (${message})`);
+          return { fallback: { reason: "updateFailed", message } };
+        }
+        s = await this.state();
+      }
       if (s.status !== "ready") {
         return { fallback: { reason: "status", status: s.status } };
       }
@@ -763,11 +868,22 @@ export class EmissaryRecomp {
     }
     const versionDir = this.versionDir(current.version);
     const program = path.relative(versionDir, exe);
+    const need = await this.missingEngine(versionDir, program);
+    if (need) {
+      // Not waited for (Play downloads it before its start): this time the playback Dolphin plays.
+      if (need === OLD_CPU_ENGINE && !this.job && !this.installing) {
+        void this.ensureEngine({ reinstall: false }).catch(() => undefined);
+      }
+      return { why: `${current.version} has no ${need} for this computer yet` };
+    }
     const linked = path.join(this.playbackRoot, "versions", current.version);
     await fs.promises.mkdir(this.playbackUserData, { recursive: true });
     await fs.promises.writeFile(path.join(this.playbackRoot, "portable.txt"), PORTABLE_TEXT);
-    // (The same version installed again is new files: linked again.)
-    const done = `${current.version} ${current.installedAt}`;
+    // (The same version installed again is new files, and an engine added since is one more: linked again.)
+    const engines = (await fs.promises.readdir(path.dirname(exe)).catch(() => [] as string[]))
+      .filter((n) => /^engine_.*\.dll$/i.test(n))
+      .sort();
+    const done = [current.version, current.installedAt, ...engines].join(" ");
     const marker = await fs.promises.readFile(path.join(linked, MIRROR_DONE), "utf8").catch(() => null);
     if (marker !== done) {
       await removeTree(linked);
@@ -877,14 +993,19 @@ export class EmissaryRecomp {
     }
   }
 
-  private async installRelease(release: EmissaryRelease, kind: "install" | "update", signal: AbortSignal) {
-    const report = throttleProgress((c, t) => {
+  /** A download's bytes, into the job that runs (throttled). */
+  private jobProgress(): ByteProgress {
+    return throttleProgress((c, t) => {
       if (this.job) {
         this.job = { ...this.job, current: c, total: t };
         this.onJob?.(this.job);
         void this.emit();
       }
     }, 150);
+  }
+
+  private async installRelease(release: EmissaryRelease, kind: "install" | "update", signal: AbortSignal) {
+    const report = this.jobProgress();
     this.setJob({ kind, phase: "download", current: 0, total: release.size });
     await fs.promises.mkdir(this.opts.root, { recursive: true });
     await ensureFreeSpace(this.opts.root, release.size + Math.round(release.size * UNPACK_FACTOR), "EmissaryRecomp");
@@ -913,6 +1034,14 @@ export class EmissaryRecomp {
       }
       top = found.top;
       program = found.program;
+      // The engine this computer needs, before the version is one that plays (missingEngine).
+      const engine = await this.missingEngine(top, program);
+      if (engine === OLD_CPU_ENGINE) {
+        await this.addEngine(release, engine, path.dirname(path.join(top, program)), kind, signal);
+        this.setJob({ kind, phase: "unpack", current: 0, total: 0 });
+      } else if (engine) {
+        throw new EmissaryError(`EmissaryRecomp ${release.version}'s download has no ${engine}.`);
+      }
       // Only the game: the upstream launcher would update files under us, and the release's own
       // portable.txt and UserData would hide ours above it.
       for (const name of ["Brawl Recompiled.exe", "Brawl Recompiled"]) {
@@ -961,6 +1090,160 @@ export class EmissaryRecomp {
     }
   }
 
+  /**
+   * The engine file the program `program` in `dir` needs on this computer and lacks, or null.
+   * Asked of its loader (askEngine: `WiiCompiled.exe --engine`, the check that picks the engine at
+   * every start) and remembered only while the launcher runs, so an install moved to another
+   * computer is checked there. Only Windows loaders that answer it are asked (an older one would
+   * start the game; its release holds both engines). No answer: the older CPUs' engine, when it
+   * isn't there (a needless download never stops a start; a missing engine would).
+   */
+  private async missingEngine(dir: string, program: string): Promise<string | null> {
+    if (this.platform !== "win32" || path.basename(program).toLowerCase() !== "wiicompiled.exe") {
+      return null;
+    }
+    const exe = path.join(dir, program);
+    const [answers] = await fileHolds(exe, [ENGINE_QUERY]);
+    if (!answers) {
+      return null;
+    }
+    if (!this.engineAnswer) {
+      this.engineAnswer = await (this.opts.askEngine ?? askEngine)(exe);
+      this.log(
+        this.engineAnswer
+          ? `EmissaryRecomp: this computer plays with ${this.engineAnswer}`
+          : `EmissaryRecomp: ${exe} ${ENGINE_QUERY} gave no answer: ${OLD_CPU_ENGINE} is fetched when missing`,
+      );
+    }
+    const need = this.engineAnswer ?? OLD_CPU_ENGINE;
+    return (await exists(path.join(path.dirname(exe), need))) ? null : need;
+  }
+
+  /** Downloads `name` (the older CPUs' engine) from `release`'s -Windows-OldCPU.zip into `programDir`. */
+  private async addEngine(
+    release: EmissaryRelease,
+    name: string,
+    programDir: string,
+    kind: "install" | "update",
+    signal: AbortSignal,
+  ) {
+    const asset = name === OLD_CPU_ENGINE ? release.oldCpu : null;
+    if (!asset) {
+      throw new EmissaryError(`EmissaryRecomp ${release.version} has no download for this computer.`);
+    }
+    this.log(`EmissaryRecomp ${release.version}: this computer needs ${name}, downloading ${asset.assetName}`);
+    this.setJob({ kind, phase: "download", current: 0, total: asset.size });
+    // The DLL is about 3 times its archive.
+    await ensureFreeSpace(this.opts.root, asset.size * 4, "EmissaryRecomp");
+    const archive = await this.download(asset, signal, this.jobProgress());
+    if (signal.aborted) {
+      throw new EmissaryCancelled();
+    }
+    this.setJob({ kind, phase: "unpack", current: 0, total: 0 });
+    const unpacked = path.join(this.file("download"), "engine");
+    const dest = path.join(programDir, name);
+    await removeTree(unpacked);
+    await fs.promises.mkdir(unpacked, { recursive: true });
+    try {
+      await (this.opts.unpack ?? unpackArchive)(archive, unpacked, signal);
+      if (signal.aborted) {
+        throw new EmissaryCancelled();
+      }
+      // At the archive's top, or in its one top folder (EmissaryRecomp/).
+      const tops = await fs.promises.readdir(unpacked).catch(() => [] as string[]);
+      let found: string | null = null;
+      for (const candidate of [path.join(unpacked, name), ...tops.map((t) => path.join(unpacked, t, name))]) {
+        if ((await fs.promises.stat(candidate).catch(() => null))?.isFile()) {
+          found = candidate;
+          break;
+        }
+      }
+      if (!found) {
+        throw new EmissaryError(`EmissaryRecomp ${release.version}'s download has no ${name}.`);
+      }
+      await fs.promises.copyFile(found, `${dest}.partial`);
+      await fs.promises.rename(`${dest}.partial`, dest);
+    } catch (err) {
+      await fs.promises.rm(`${dest}.partial`, { force: true }).catch(() => undefined);
+      throw await asDiskSpaceError(err, this.opts.root, "EmissaryRecomp");
+    } finally {
+      await removeTree(unpacked).catch(() => undefined);
+    }
+    this.log(`EmissaryRecomp ${release.version}: ${name} added`);
+  }
+
+  /**
+   * The installed version has the engine this computer needs (missingEngine): the older CPUs'
+   * engine is downloaded into it now when it hasn't (Play waits for it like an install); a version
+   * without its main engine is installed again (`reinstall`, Play only). Throws when that can't be
+   * done.
+   */
+  private async ensureEngine({ reinstall }: { reinstall: boolean }): Promise<void> {
+    const current = await this.readJson<Current>("current.json");
+    if (!current?.program) {
+      return;
+    }
+    const versionDir = this.versionDir(current.version);
+    const need = await this.missingEngine(versionDir, current.program);
+    if (!need) {
+      return;
+    }
+    if (need !== OLD_CPU_ENGINE) {
+      if (!reinstall) {
+        throw new EmissaryError(`EmissaryRecomp ${current.version} has no ${need}.`);
+      }
+      this.log(`EmissaryRecomp ${current.version} has no ${need}: installing it again`);
+      await this.writeJson("current.json", null);
+      await this.install();
+      return;
+    }
+    if (this.job || this.installing) {
+      throw new EmissaryError("EmissaryRecomp is already being downloaded.");
+    }
+    const run = (async () => {
+      const abort = new AbortController();
+      this.abort = abort;
+      this.lastError = null;
+      try {
+        await this.lock.runExclusive(async () => {
+          const release = await this.releaseOf(current.version);
+          if (!release) {
+            throw new EmissaryError(
+              `Could not reach GitHub to download EmissaryRecomp (${this.releaseError ?? "no answer"}).`,
+            );
+          }
+          await this.addEngine(
+            release,
+            need,
+            path.dirname(path.join(versionDir, current.program ?? "")),
+            "update",
+            abort.signal,
+          );
+        });
+      } catch (err) {
+        if (err instanceof EmissaryCancelled) {
+          this.log("EmissaryRecomp: cancelled");
+        } else {
+          this.lastError = err instanceof Error ? err.message : String(err);
+          this.log(`EmissaryRecomp: ${this.lastError}`);
+        }
+        throw err;
+      } finally {
+        await removeTree(this.file("download"), { tries: 4, delayMs: 100 }).catch(() => undefined);
+        this.job = null;
+        this.abort = null;
+        await this.emit();
+      }
+      return this.state();
+    })();
+    this.installing = run;
+    try {
+      await run;
+    } finally {
+      this.installing = null;
+    }
+  }
+
   /** Makes `record` the version that plays and deletes the others. */
   private async switchTo(record: Current) {
     const before = await this.readJson<Current>("current.json");
@@ -994,7 +1277,7 @@ export class EmissaryRecomp {
     await fs.promises.writeFile(this.file("portable.txt"), PORTABLE_TEXT);
   }
 
-  private async download(release: EmissaryRelease, signal: AbortSignal, onProgress: ByteProgress): Promise<string> {
+  private async download(release: EmissaryAsset, signal: AbortSignal, onProgress: ByteProgress): Promise<string> {
     const file = path.join(this.file("download"), path.basename(release.assetName).replace(/[^\w.+-]/g, "_"));
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     let res: Response;

@@ -62,12 +62,14 @@ const releaseZip = (marker: string, online = true) =>
   });
 
 // A release from EmissaryRecomp's CI: WiiCompiled.exe with Brawl Online's core, its DLLs, Sys/,
-// wii_bootstrap/ and a portable.txt + UserData of its own, in one top folder.
-const ciZip = (marker: string, { core = true, playback = true } = {}) =>
+// wii_bootstrap/ and a portable.txt + UserData of its own, in one top folder. `split`: a release
+// since the older CPUs' engine has a download of its own (its loader answers --engine).
+const ciZip = (marker: string, { core = true, playback = true, split = false } = {}) =>
   zipOf({
     "EmissaryRecomp/WiiCompiled.exe": `exe ${marker} BRAWL_SD_VOLATILE_WRITES${core ? " BRAWL_ONLINE_CORE" : ""}${
       core && playback ? " BRAWL_ONLINE_REPLAY_COMM" : ""
-    }`,
+    }${split ? " --engine" : ""}`,
+    ...(split ? { "EmissaryRecomp/engine_usa.dll": `v3 ${marker}` } : {}),
     "EmissaryRecomp/SDL3.dll": "sdl",
     "EmissaryRecomp/Sys/files.txt": "sys",
     "EmissaryRecomp/wii_bootstrap/shared2/x": "x",
@@ -75,11 +77,24 @@ const ciZip = (marker: string, { core = true, playback = true } = {}) =>
     "EmissaryRecomp/UserData/Config.toml": "theirs",
   });
 
-function githubRelease(tag: string, zip: Buffer, digest = true, manifest = false) {
+// A release's -Windows-OldCPU.zip: engine_usa_v2.dll alone, in the top folder.
+const oldCpuZip = (marker: string) => zipOf({ "EmissaryRecomp/engine_usa_v2.dll": `v2 ${marker}` });
+
+function githubRelease(tag: string, zip: Buffer, digest = true, manifest = false, oldCpu?: Buffer) {
   return {
     tag_name: tag,
     assets: [
       ...(manifest ? [{ name: "manifest.json", size: 80, browser_download_url: `${DL}${tag}/manifest.json` }] : []),
+      ...(oldCpu
+        ? [
+            {
+              name: `BrawlRecompiled-${tag}-Windows-OldCPU.zip`,
+              size: oldCpu.length,
+              browser_download_url: `${DL}${tag}/BrawlRecompiled-${tag}-Windows-OldCPU.zip`,
+              digest: `sha256:${sha256(oldCpu)}`,
+            },
+          ]
+        : []),
       { name: `BrawlRecompiled-${tag}-Linux.tar.gz`, size: 10, browser_download_url: `${DL}${tag}/l.tar.gz` },
       {
         name: `BrawlRecompiled-${tag}-Windows.zip`,
@@ -109,6 +124,17 @@ describe("parseRelease", () => {
       "BrawlRecompiled-v0.6.0-macOS.tar.gz",
     );
     expect(() => parseRelease(githubRelease("v0.6.0", zip), "darwin", "x64")).toThrow(/no release for this computer/);
+  });
+
+  it("finds the older CPUs' engine download, on Windows only", () => {
+    const v2 = Buffer.from("v2 zip");
+    const r = githubRelease("v0.7.6", zip, true, false, v2);
+    expect(parseRelease(r, "win32")).toMatchObject({
+      assetName: "BrawlRecompiled-v0.7.6-Windows.zip",
+      oldCpu: { assetName: "BrawlRecompiled-v0.7.6-Windows-OldCPU.zip", size: v2.length, sha256: sha256(v2) },
+    });
+    expect(parseRelease(r, "linux").oldCpu).toBeNull();
+    expect(parseRelease(githubRelease("v0.7.5", zip), "win32").oldCpu).toBeNull();
   });
 
   it("refuses a computer with no release and downloads from elsewhere", () => {
@@ -213,17 +239,46 @@ describe("the Brawl save", () => {
 describe("EmissaryRecomp", () => {
   let dir: string;
   let iso: string;
-  let latest: { tag: string; zip: Buffer; manifest?: EmissaryManifest };
+  type Published = { tag: string; zip: Buffer; manifest?: EmissaryManifest; oldCpu?: Buffer };
+  let latest: Published;
+  /** Releases before the latest, by tag (`/releases/tags/<tag>`). */
+  let older: Record<string, Published>;
   let downloads: number;
   let failDownloads: boolean;
+  /** The loader's answer to --engine (askEngine's double), and how often it was asked. */
+  let engineAnswer: string | null;
+  let asked: number;
+  let engineDownloads: number;
+  let failEngineDownloads: boolean;
+  let damageEngineDownloads: boolean;
   let extracts: number;
   let isoValid: boolean;
 
+  const published = (tag: string) => (tag === latest.tag ? latest : older[tag]);
   const fetchImpl = async (url: string) => {
     if (url === `${EMISSARY_API}/latest`) {
-      return new Response(JSON.stringify(githubRelease(latest.tag, latest.zip, true, latest.manifest != null)), {
-        status: 200,
-      });
+      return new Response(
+        JSON.stringify(githubRelease(latest.tag, latest.zip, true, latest.manifest != null, latest.oldCpu)),
+        { status: 200 },
+      );
+    }
+    if (url.startsWith(`${EMISSARY_API}/tags/`)) {
+      const r = published(decodeURIComponent(url.slice(`${EMISSARY_API}/tags/`.length)));
+      return r
+        ? new Response(JSON.stringify(githubRelease(r.tag, r.zip, true, r.manifest != null, r.oldCpu)), { status: 200 })
+        : new Response("", { status: 404 });
+    }
+    if (url.endsWith("-Windows-OldCPU.zip")) {
+      engineDownloads++;
+      const data = published(url.slice(DL.length).split("/")[0])?.oldCpu;
+      if (failEngineDownloads || !data) {
+        return new Response("", { status: 503 });
+      }
+      const body = Buffer.from(data);
+      if (damageEngineDownloads) {
+        body[body.length - 1] ^= 0xff;
+      }
+      return new Response(new Uint8Array(body), { status: 200 });
     }
     if (url.endsWith("/manifest.json") && latest.manifest) {
       return new Response(JSON.stringify(latest.manifest), { status: 200 });
@@ -247,6 +302,10 @@ describe("EmissaryRecomp", () => {
       dolphinTool: () => "DolphinTool.exe",
       fetch: fetchImpl,
       unpack: unpackArchive,
+      askEngine: async () => {
+        asked++;
+        return engineAnswer;
+      },
       extract: async (_tool, _iso, out, onPercent) => {
         extracts++;
         await fs.promises.mkdir(path.join(out, "DATA", "sys"), { recursive: true });
@@ -261,9 +320,15 @@ describe("EmissaryRecomp", () => {
     iso = path.join(dir, "brawl.iso");
     await fs.promises.writeFile(iso, "disc");
     latest = { tag: "v0.6.0", zip: await releaseZip("0.6.0") };
+    older = {};
     extracts = 0;
     downloads = 0;
     failDownloads = false;
+    engineAnswer = "engine_usa.dll";
+    asked = 0;
+    engineDownloads = 0;
+    failEngineDownloads = false;
+    damageEngineDownloads = false;
     isoValid = true;
   });
 
@@ -592,6 +657,141 @@ describe("EmissaryRecomp", () => {
     delete record.features.playback;
     await fs.promises.writeFile(file, JSON.stringify(record));
     expect(await em.prepareForPlayback()).toMatchObject({ version: "v0.7.0" });
+  });
+
+  describe("the older CPUs' engine (-Windows-OldCPU.zip)", () => {
+    const split = async (tag: string): Promise<Published> => ({
+      tag,
+      zip: await ciZip(tag, { split: true }),
+      oldCpu: await oldCpuZip(tag),
+    });
+    const v2Of = (em: EmissaryRecomp, tag: string) => path.join(em.root, "versions", tag, "engine_usa_v2.dll");
+    const until = async (done: () => Promise<boolean>) => {
+      for (let i = 0; i < 200 && !(await done()); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+
+    it("isn't downloaded for a processor that doesn't need it", async () => {
+      latest = await split("v0.7.6");
+      const em = make();
+      expect((await em.install()).status).toBe("ready");
+      expect(engineDownloads).toBe(0);
+      expect(fs.existsSync(v2Of(em, "v0.7.6"))).toBe(false);
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.6" });
+      expect(engineDownloads).toBe(0);
+      // Asked once while the launcher runs.
+      expect(asked).toBe(1);
+    });
+
+    it("comes with the install on a processor without AVX2", async () => {
+      engineAnswer = "engine_usa_v2.dll";
+      latest = await split("v0.7.6");
+      const em = make();
+      expect((await em.install()).status).toBe("ready");
+      expect(engineDownloads).toBe(1);
+      expect(await fs.promises.readFile(v2Of(em, "v0.7.6"), "utf8")).toBe("v2 v0.7.6");
+      expect(fs.existsSync(path.join(em.root, "download"))).toBe(false);
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.6" });
+      expect(engineDownloads).toBe(1);
+    });
+
+    it("is downloaded before Play when the install moved to a processor that needs it", async () => {
+      latest = await split("v0.7.6");
+      await make().install();
+      // Another computer: another launcher session, whose loader names the older CPUs' engine.
+      engineAnswer = "engine_usa_v2.dll";
+      const jobs: EmissaryJob[] = [];
+      const em = make();
+      expect(await em.prepareForPlay((j) => jobs.push(j))).toMatchObject({ version: "v0.7.6" });
+      expect(engineDownloads).toBe(1);
+      expect(await fs.promises.readFile(v2Of(em, "v0.7.6"), "utf8")).toBe("v2 v0.7.6");
+      expect(jobs.some((j) => j.phase === "download" && j.total === latest.oldCpu?.length)).toBe(true);
+      expect((await em.state()).job).toBeNull();
+    });
+
+    it("leaves Play to Dolphin when it can't be downloaded, and is tried again at the next Play", async () => {
+      latest = await split("v0.7.6");
+      await make().install();
+      engineAnswer = "engine_usa_v2.dll";
+      failEngineDownloads = true;
+      const em = make();
+      expect(await em.prepareForPlay()).toMatchObject({ fallback: { reason: "updateFailed" } });
+      expect(fs.existsSync(v2Of(em, "v0.7.6"))).toBe(false);
+      failEngineDownloads = false;
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.6" });
+      expect(fs.existsSync(v2Of(em, "v0.7.6"))).toBe(true);
+    });
+
+    it("is downloaded when the loader gives no answer", async () => {
+      engineAnswer = null;
+      latest = await split("v0.7.6");
+      const em = make();
+      await em.install();
+      expect(engineDownloads).toBe(1);
+      expect(fs.existsSync(v2Of(em, "v0.7.6"))).toBe(true);
+    });
+
+    it("isn't asked of a loader that doesn't answer --engine (its release has both engines)", async () => {
+      latest = { tag: "v0.7.5", zip: await ciZip("0.7.5") };
+      const em = make();
+      await em.install();
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.5" });
+      expect(await em.prepareForPlayback()).toHaveProperty("exe");
+      expect(asked).toBe(0);
+      expect(engineDownloads).toBe(0);
+    });
+
+    it("comes from the installed version's own release when the latest is another", async () => {
+      latest = await split("v0.7.6");
+      await make().install();
+      older["v0.7.6"] = latest;
+      // The latest is for another launcher protocol: v0.7.6 stays the one that plays.
+      latest = {
+        ...(await split("v0.8.0")),
+        manifest: { version: "v0.8.0", brawlOnline: "0.9.0", protocol: EMISSARY_PROTOCOL + 1 },
+      };
+      engineAnswer = "engine_usa_v2.dll";
+      const em = make();
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.6" });
+      expect(await fs.promises.readFile(v2Of(em, "v0.7.6"), "utf8")).toBe("v2 v0.7.6");
+    });
+
+    it("isn't waited for by a replay: Dolphin plays it, the engine comes meanwhile and is linked in next time", async () => {
+      latest = await split("v0.7.6");
+      const first = make();
+      await first.install();
+      expect(await first.prepareForPlayback()).toHaveProperty("exe");
+      engineAnswer = "engine_usa_v2.dll";
+      const em = make();
+      expect(await em.prepareForPlayback()).toHaveProperty("why");
+      await until(async () => fs.existsSync(v2Of(em, "v0.7.6")) && (await em.state()).job == null);
+      expect(engineDownloads).toBe(1);
+      const played = await em.prepareForPlayback();
+      expect(played).toHaveProperty("exe");
+      expect(fs.existsSync(path.join(em.playbackRoot, "versions", "v0.7.6", "engine_usa_v2.dll"))).toBe(true);
+    });
+
+    it("installs the version again when its main engine is gone", async () => {
+      latest = await split("v0.7.6");
+      const em = make();
+      await em.install();
+      await fs.promises.rm(path.join(em.root, "versions", "v0.7.6", "engine_usa.dll"));
+      const before = downloads;
+      expect(await em.prepareForPlay()).toMatchObject({ version: "v0.7.6" });
+      expect(downloads).toBe(before + 1);
+      expect(fs.existsSync(path.join(em.root, "versions", "v0.7.6", "engine_usa.dll"))).toBe(true);
+    });
+
+    it("refuses a damaged download of it and installs nothing", async () => {
+      engineAnswer = "engine_usa_v2.dll";
+      damageEngineDownloads = true;
+      latest = await split("v0.7.6");
+      const em = make();
+      await expect(em.install()).rejects.toThrow(/damaged/);
+      expect(fs.existsSync(path.join(em.root, "versions", "v0.7.6"))).toBe(false);
+      expect((await em.state()).installed).toBeNull();
+    });
   });
 
   it("can't be removed while the game runs", async () => {

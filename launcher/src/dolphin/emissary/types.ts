@@ -22,16 +22,27 @@ export type EmissaryManifest = {
   protocol: number;
 };
 
-/** A release's download for this computer, as GitHub's API lists it. */
-export type EmissaryRelease = {
-  /** The release's tag (`v0.6.0`). */
-  version: string;
+/** One download of a release, as GitHub's API lists it. */
+export type EmissaryAsset = {
   assetName: string;
   url: string;
   /** The archive's size in bytes. */
   size: number;
   /** GitHub's sha256 of the archive, when it gives one. */
   sha256: string | null;
+};
+
+/** A release's download for this computer, as GitHub's API lists it. */
+export type EmissaryRelease = EmissaryAsset & {
+  /** The release's tag (`v0.6.0`). */
+  version: string;
+  /**
+   * Windows: the engine for processors without AVX2 (`engine_usa_v2.dll`), in a download of its
+   * own (`-Windows-OldCPU.zip`), fetched only when the release's loader names it
+   * (EmissaryRecomp.missingEngine). Absent or null: the release has none (its main download holds
+   * both engines, or it is not for Windows).
+   */
+  oldCpu?: EmissaryAsset | null;
   /** Its manifest.json asset's URL, when it has one (releases before CI have none). */
   manifestUrl: string | null;
   /** That manifest, once read; null without one (or when it could not be read). */
