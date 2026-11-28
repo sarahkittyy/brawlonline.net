@@ -2553,9 +2553,15 @@ bool DrawsForScreen()
 // is not 0 while that menu is open (game-code room_play.cpp TASK_RULES_OPEN).
 static bool QuickChatCss(const Core::CPUThreadGuard& guard)
 {
+  // OnlineCss too (the search idle): after a Direct, Unranked or Ranked set the connection is
+  // closed but the match's chat stays for gg (Chat.cpp), and quick chat with it. Without a chat
+  // the window isn't shown, so the D-pad stays the hand's (QuickChat::SetChatShown).
   const Rooms::Screen screen = Rooms::GetScreen();
-  if (screen != Rooms::Screen::Room && screen != Rooms::Screen::OnlineBusy)
+  if (screen != Rooms::Screen::Room && screen != Rooms::Screen::OnlineBusy &&
+      screen != Rooms::Screen::OnlineCss)
+  {
     return false;
+  }
   const Gprb::Guest g(guard.GetSystem().GetMemory());
   if (Gprb::CurrentSceneName(g) != "scSelctCharacter")
     return false;

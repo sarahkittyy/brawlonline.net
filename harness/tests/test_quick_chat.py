@@ -163,6 +163,56 @@ class Shooter:
         u32.ReleaseDC(self.hwnd, hdc)
 
 
+def test_quick_chat_on_the_online_css_after_a_set(backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance]) -> None:
+    """After a Direct, Unranked or Ranked set the connection closes, the match's chat stays for gg
+    (Chat.cpp: until the next search or leaving the CSS) and the game is on its online CSS with the
+    search idle (LOCAL.screen OnlineCss, not OnlineBusy). Quick chat is used there too (Sarah's
+    board: "I saw someone trying to quick send a message after game and it moved their cursor
+    instead")."""
+    ua = backend.create_user("pia", "PIAA")
+    ub = backend.create_user("uli", "ULII")
+    a = boot(dolphin, "qc-pia", backend, ua, window=True, video="D3D11")
+    b = boot(dolphin, "qc-uli", backend, ub, window=False)
+    for p in (a, b):
+        _to_versus_css(p)
+        _online(p)
+        hold_screen(p, "online-css")
+    write_quick_chat(a, MESSAGES)
+    a.c.mm_search_direct(ub.connect_code, session="none")
+    b.c.mm_search_direct(ua.connect_code, session="none")
+    _wait(lambda: all(p.c.mm_status()["state"] == "connection_success" for p in (a, b)), 60, "the match")
+    for p in (a, b):
+        until_chat(p, lambda s: s["kind"] == "match" and readers(s) == 1 and s["match_connected"],
+                   "the match's chat")
+    # The set is over: the connection closes (not the CSS's cleanup, which ends the chat too).
+    for p in (a, b):
+        p.c.mm_cancel()
+    _wait(lambda: all(p.c.mm_status()["state"] != "connection_success" for p in (a, b)), 15,
+          "the connection closed")
+    assert a.c.call("chat_status")["kind"] == "match"
+    shoot = Shooter(a)
+    a.c.call("chat_ui", record=True)
+
+    _wait(lambda: (lambda q: q if q["usable"] else None)(quick(a)), 10, "quick chat usable on the online CSS")
+    before = hand(a)
+    B.tap(a.c, 0, ["DUP"], hold=4, release=12)
+    f = last_frame(a)
+    assert f["quick_chat"] == 1 and f["quick_chat_group"] == UP, f
+    assert hand(a) == before, "the D-pad moved the hand instead of opening quick chat"
+    shoot("10-online-css-up-open")
+    B.tap(a.c, 0, ["DUP"], hold=4, release=4)
+    until_chat(b, lambda s: "ggs!" in texts(s, "message"), "pia's gg after the set")
+    assert last_frame(a)["quick_chat"] == 0
+
+    # Leaving the CSS ends the match's chat (CMD_CLEANUP_CONNECTION): the D-pad is the hand's again.
+    a.c.call("chat_leave")
+    _wait(lambda: (lambda q: q if not q["usable"] else None)(quick(a)), 10, "quick chat off without a chat")
+    before = hand(a)
+    B.tap(a.c, 0, ["DDOWN"], hold=20, release=10)
+    assert hand(a)[1] != before[1]
+
+
 def test_quick_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance]) -> None:
     ua = backend.create_user("ines", "INES")
     ub = backend.create_user("otto", "OTTO")

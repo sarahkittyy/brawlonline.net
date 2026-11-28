@@ -9,8 +9,9 @@
 //
 // On the CSS the D-pad moves the hand like the stick (measured 2026-11-26); while quick chat can be
 // used it is taken out of what the game reads, and B too while a group is open (B closes it):
-// - the CSS of a room, or of a Direct / Unranked / Ranked set (LOCAL.screen Room or OnlineBusy on
-//   scSelctCharacter), with the room's rules menu closed;
+// - the CSS of a room, or of a Direct / Unranked / Ranked set (LOCAL.screen Room, OnlineBusy, or
+//   OnlineCss once the set is over and its chat is still up, on scSelctCharacter), with the
+//   room's rules menu closed;
 // - the chat window shown (in a chat group, [Online] DisableChat off, not a spectator's chat);
 // - at least one message set.
 // Only GameCube controllers (Dolphin's mapped ones and the Wii U adapter's, EmissaryRecomp's):
