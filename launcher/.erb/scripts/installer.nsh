@@ -500,13 +500,8 @@ var StartMenuShortcutCheckbox
     ; The banner stays until the new launcher is started (customInstall) or the installer ends.
     ${IfNot} ${UAC_IsInnerInstance}
       ; Banner's box has one line of text (control 1030; it has no 76 for a /set) and titles its
-      ; window, which the taskbar shows, with that line, so the title is set apart.
-      Banner::show "Updating ${PRODUCT_NAME}. It reopens after."
-      Banner::getWindow
-      Pop $R1
-      ${If} $R1 != 0
-        SendMessage $R1 ${WM_SETTEXT} 0 "STR:Updating ${PRODUCT_NAME}"
-      ${EndIf}
+      ; window, which the taskbar shows, with that line too.
+      Banner::show "Updating ${PRODUCT_NAME}..."
     ${EndIf}
   ${EndIf}
 
