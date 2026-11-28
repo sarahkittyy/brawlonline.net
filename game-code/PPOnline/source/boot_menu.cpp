@@ -49,8 +49,9 @@ namespace BootMenu {
     static const int MENU_ONLINE_PAGE = 30;
 
     // DEBUG scratch[14] (tests): bit 0 the boot redirected, bit 1 the opening movie skipped,
-    // bit 2 the logo skipped, bit 3 the menu sent to the ONLINE page; bits 16-23 the argument
-    // sqTitle asked sqMenuMain for.
+    // bit 2 the logo skipped, bit 3 the menu sent to the ONLINE page, bit 4 the boot was a held
+    // button's (Training, Replays or the title); bits 16-23 the argument sqTitle asked sqMenuMain
+    // for.
     static void note(u32 bits) { PPOM::g_block.debug.scratch[14] |= bits; }
 
     static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
@@ -88,6 +89,24 @@ namespace BootMenu {
         return false;
     }
 
+    // What BootToCSS v5.4 passes from sqBoot: its default case (sqVsMelee, 0) and the cases of a
+    // button held at that moment on any port: L/R, or Z/B on a Nunchuk, (sqTraining, 0), Z, or C/-
+    // on a Nunchuk, (sqReplay, its customLoadTarget, 0), Start (sqPrizeCheck, 0x14, the title).
+    // Online every one of them goes to the ONLINE page: the launcher's Play, room and Direct
+    // requests wait for the menus, so a boot to Training or Replays never got there (bug report
+    // #381: every boot sqBoot -> sqTraining, room joins and creates that never happened; #294,
+    // #297, #363: controllers that connected with L and R held). Players with springless
+    // triggers hold R while the controller connects on purpose (GCAdapter.cpp), and that is the
+    // moment of this boot. The held case's port is still the menu decision pad (gmSetRule+0x24),
+    // the controller in it.
+    static bool bootToCssCase(const char* name, int arg)
+    {
+        if (arg == 0)
+            return strcmp(name, "sqVsMelee") == 0 || strcmp(name, "sqTraining") == 0
+                || strcmp(name, "sqReplay") == 0;
+        return arg == 0x14 && strcmp(name, "sqPrizeCheck") == 0;
+    }
+
     static void hkSetNextSequence(void* mgr, const char* name, int arg)
     {
         if (s_toOnline) {
@@ -99,8 +118,10 @@ namespace BootMenu {
             } else if (strcmp(name, "sqTitle") != 0) {
                 s_toOnline = false;   // not the way to the menus: leave it alone
             }
-        } else if (arg == 0 && strcmp(name, "sqVsMelee") == 0 && strcmp(currentSequence(), "sqBoot") == 0
+        } else if (bootToCssCase(name, arg) && strcmp(currentSequence(), "sqBoot") == 0
                    && pplusBootsToCss()) {
+            if (strcmp(name, "sqVsMelee") != 0)
+                note(16);   // a held button's case
             // The game's own string, which the Start case passes (0x80701C94).
             const char* prize = (const char*)0x80701C94;
             if (strcmp(prize, "sqPrizeCheck") == 0) {

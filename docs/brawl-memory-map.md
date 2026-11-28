@@ -81,7 +81,7 @@ This happens because of P+'s **"Boot Directly to CSS v5.4"** (`Source/Project+/B
 | Start | the title, then the main menu |
 | Z | `sqReplay` |
 
-**The harness must not hold L, R, Start or Z during scBoot.** Tapping A is safe. The port that triggers the code is also written to `gmSetRule+0x24` (the menu decision pad).
+With our plugin (`boot_menu.cpp`, since bug report #381) every one of these goes to the ONLINE page instead, like the default case. Without it, **the harness must not hold L, R, Start or Z during scBoot.** Tapping A is safe. The port that triggers the code is also written to `gmSetRule+0x24` (the menu decision pad).
 
 **Sequences.** Allowed in a netplay Versus session: `sqBoot`, `sqVsMelee`, `sqMenuMain`, `sqTitle`, `sqPrizeCheck`. Every other `sq*` name in `sora_scene.rel` is listed in `brawl.BANNED_SEQUENCES` (Section 4).
 

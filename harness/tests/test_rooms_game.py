@@ -951,7 +951,9 @@ def test_room_launcher_join_while_the_game_starts(backend: OnlineBackend,
         g.steps("wait 60")
         g.shot("01-in-the-room-after-the-boot")
         log = (Path(g.inst.user_dir) / "Logs" / "dolphin.log").read_text(errors="replace")
-        assert "refused" not in log, [l for l in log.splitlines() if "refused" in l]
+        # Rooms' answers only (NAT-PMP's "the router refused it" is a router without it).
+        refused = [l for l in log.splitlines() if "refused" in l and "Rooms:" in l]
+        assert not refused, refused
     finally:
         owner.stop()
 
@@ -1188,6 +1190,45 @@ def test_play_from_a_closed_game_with_the_controller_in_port_2(
     assert g.lock_in()["pad"] == 1, g.lock_in()
     g.shot("01-locked-in-from-port-2")
     g.c.mm_cancel()
+
+
+def test_create_room_from_a_closed_game_with_l_and_r_held_at_boot(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """Bug report #381 (BUHG#786, launcher 0.2.14: "GAME NOT LAUNCHING ONLINE, CONSTATLY GOING TO
+    TRAINING MODE"): every boot went sqBoot -> sqTraining, so the launcher's room join and create
+    never happened (they wait for the menus). P+'s Boot Directly to CSS boots to Training when a
+    pad holds L or R at that moment (players with springless triggers hold R while the controller
+    connects, at Dolphin's start). Now the plugin takes that case to the ONLINE page like the
+    default one (boot_menu.cpp). Port 2 holds L and R on every frame (Triggers/Threshold 0, Always
+    Connected, as test_replay's bug #59 test); Create room with the game closed lands in the new
+    room as its host."""
+    import json
+    import uuid
+    from datetime import datetime, timezone
+    u = backend.create_user("heldboot", "HELD")
+    rid = str(uuid.uuid4())
+
+    def put(user_dir: Path) -> None:
+        created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        (Path(user_dir) / "Online" / "join-room.json").write_text(json.dumps(
+            {"version": 1, "id": rid, "kind": "create", "createdAt": created}))
+
+    g = _boot(dolphin, "held-boot", backend, u, gpu_backend, "held-lr-boot", "gameplay", artifacts=ART,
+              gcpad_ini={"GCPad2": {"Triggers/Threshold": "0.", "Options/Always Connected": True}},
+              before_launch=put)
+    assert launcher_answer(g, rid)["result"] == "accepted"
+    g.c.wait_state("running", timeout=120)
+    log_path = Path(g.inst.user_dir) / "Logs" / "dolphin.log"
+    _wait(lambda: "sqBoot -> " in log_path.read_text(errors="replace"), 120, "the boot's sequence")
+    v = until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"],
+                   "in the new room", timeout=120)
+    assert v["host"] == v["local_port"] == 0, v
+    _wait(lambda: g.scene() == CSS, 60, "the room's CSS")
+    g.steps("wait 60")
+    g.shot("01-in-the-room-after-a-held-boot")
+    log = log_path.read_text(errors="replace")
+    assert "sqTraining" not in log, [ln for ln in log.splitlines() if "sqTraining" in ln]
+    assert "sqBoot -> sqPrizeCheck" in log
 
 
 def write_create(g: Game, ruleset: str | None = None) -> str:
